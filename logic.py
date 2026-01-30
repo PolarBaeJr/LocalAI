@@ -1,5 +1,5 @@
 import time
-import streamlit as st
+from nicegui import app
 
 from Search import perform_search
 from WebAccess import fetch_url
@@ -22,12 +22,13 @@ def gather_context(prompt: str, web_url: str, deadline: float):
     Run search and return search_context, web_context, timed_out.
     Also records debug info and sets evidence for downstream use.
     """
+    state = app.storage.user
     search_results = []
     search_error = None
     timed_out = False
     web_context = ""  # URL fetch removed
 
-    use_search = st.session_state.get("use_search", False)
+    use_search = state.get("use_search", False)
     if use_search:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -36,10 +37,9 @@ def gather_context(prompt: str, web_url: str, deadline: float):
         else:
             _t_search = time.perf_counter()
             dbg("Searching the web…")
-            with st.spinner("Searching..."):
-                search_results, search_error = perform_search(
-                    prompt, max_results=10, timeout=min(30, int(remaining))
-                )
+            search_results, search_error = perform_search(
+                prompt, max_results=10, timeout=min(30, int(remaining))
+            )
             add_timing("search", time.perf_counter() - _t_search)
             set_debug("search", {"results": search_results, "error": search_error})
             if search_error:
