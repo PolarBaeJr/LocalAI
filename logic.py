@@ -3,7 +3,7 @@ from nicegui import app
 
 from Search import perform_search
 from WebAccess import fetch_url
-from search_error import render_search_error
+from UI import render_search_error
 from Debug import dbg, set_debug, add_error, add_timing, add_fetch, set_evidence
 
 
