@@ -1,5 +1,15 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "python-envs.pythonProjects": []
+    "python-envs.pythonProjects": [],
+    "python.defaultInterpreterPath": "/Users/matthewcheng/miniforge3/envs/localai/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.profiles.osx": {
+        "localai (conda)": {
+            "path": "zsh",
+            "args": ["-l", "-c", "conda activate localai && exec zsh -l"],
+            "icon": "terminal-bash"
+        }
+    },
+    "terminal.integrated.defaultProfile.osx": "localai (conda)"
 }
