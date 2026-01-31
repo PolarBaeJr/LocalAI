@@ -2,25 +2,22 @@ import asyncio
 import json
 import threading
 import time
-import uuid
-from pathlib import Path
 from typing import Dict, List
 
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from Prompt import build_prompt, build_chat_context
 from Debug import (
     init_debug,
-    add_timing,
     set_prompt,
-    status,
     attach_state,
 )
 from Model import OLLAMA_URL, MODEL, SEARCH_TIME_BUDGET
 from Config import apply_defaults
 from logic import split_thinking, gather_context
+from uiconfig import HTML_TEMPLATE, ensure_html_exists
 
 app = FastAPI()
 
@@ -36,14 +33,10 @@ def get_state(session_id: str) -> dict:
     return state
 
 
-HTML_TEMPLATE = Path(__file__).with_name("index.html")
-
-
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     """Serve the lightweight HTML shell."""
-    if not HTML_TEMPLATE.exists():
-        build_html()
+    ensure_html_exists()
     return HTMLResponse(HTML_TEMPLATE.read_text(encoding="utf-8"))
 
 
@@ -174,360 +167,8 @@ async def send(request: Request):
     return StreamingResponse(event_stream(), media_type="text/plain")
 
 
-def build_html():
-    """
-    Generate a single-page HTML with hand-rolled layout and streaming client.
-    Stored separately so the user can tweak styles freely.
-    """
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Local Chat</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
-  <style>
-    :root {{
-      --bg: #0d1117;
-      --panel: #111827;
-      --accent: #16a34a;
-      --muted: #9ca3af;
-      --border: #1f2937;
-      --text: #e5e7eb;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      font-family: 'Space Grotesk', sans-serif;
-      background: radial-gradient(circle at 20% 20%, #0b1220, #05080f 40%), var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }}
-    header {{
-      padding: 18px 24px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      background: rgba(17, 24, 39, 0.7);
-      backdrop-filter: blur(8px);
-      position: sticky;
-      top: 0;
-      z-index: 2;
-    }}
-    .brand {{
-      font-weight: 600;
-      letter-spacing: 0.01em;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }}
-    .brand span {{
-      padding: 6px 10px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      background: #0b1324;
-      font-size: 12px;
-      color: var(--muted);
-    }}
-    .controls {{
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }}
-    .toggle {{
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 14px;
-      color: var(--muted);
-      cursor: pointer;
-    }}
-    .toggle input {{ accent-color: var(--accent); width: 18px; height: 18px; }}
-    .badge {{
-      font-size: 12px;
-      padding: 6px 10px;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-      color: var(--muted);
-    }}
-    main {{
-      flex: 1;
-      max-width: 960px;
-      width: 100%;
-      margin: 0 auto;
-      padding: 24px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-    }}
-    .panel {{
-      background: rgba(17, 24, 39, 0.75);
-      border: 1px solid var(--border);
-      border-radius: 18px;
-      padding: 16px;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.35);
-    }}
-    .upload {{
-      border: 1px dashed var(--border);
-      padding: 14px;
-      border-radius: 14px;
-      background: rgba(255,255,255,0.01);
-      color: var(--muted);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-    }}
-    #history {{
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      max-height: calc(100vh - 280px);
-      overflow-y: auto;
-      padding-right: 4px;
-    }}
-    .msg {{
-      padding: 14px 16px;
-      border-radius: 14px;
-      line-height: 1.55;
-      white-space: pre-wrap;
-      border: 1px solid var(--border);
-    }}
-    .msg.user {{ background: #0b1324; border-color: #172033; }}
-    .msg.assistant {{ background: #0f172a; border-color: #1e293b; }}
-    .label {{ font-size: 12px; color: var(--muted); margin-bottom: 4px; }}
-    .input-area {{
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 10px;
-      align-items: end;
-    }}
-    textarea {{
-      width: 100%;
-      resize: none;
-      background: #0b1324;
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 12px 14px;
-      font-size: 15px;
-      line-height: 1.4;
-      min-height: 80px;
-    }}
-    button {{
-      background: linear-gradient(120deg, #16a34a, #14b8a6);
-      color: white;
-      border: none;
-      border-radius: 12px;
-      padding: 12px 18px;
-      font-weight: 600;
-      cursor: pointer;
-      box-shadow: 0 10px 30px rgba(20,184,166,0.25);
-      transition: transform 120ms ease, box-shadow 120ms ease;
-    }}
-    button:active {{ transform: translateY(1px); box-shadow: 0 6px 18px rgba(20,184,166,0.2); }}
-    .toast {{
-      position: fixed;
-      bottom: 18px;
-      right: 18px;
-      background: #111827;
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 10px 14px;
-      border-radius: 10px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-      opacity: 0;
-      transform: translateY(10px);
-      transition: all 160ms ease;
-      z-index: 5;
-    }}
-    .toast.show {{ opacity: 1; transform: translateY(0); }}
-    @media (max-width: 700px) {{
-      main {{ padding: 16px; }}
-      header {{ flex-direction: column; align-items: flex-start; }}
-      .input-area {{ grid-template-columns: 1fr; }}
-      button {{ width: 100%; }}
-    }}
-  </style>
-</head>
-<body>
-  <header>
-    <div class="brand">
-      Local Chat
-      <span>FastAPI + custom HTML</span>
-    </div>
-    <div class="controls">
-      <label class="toggle">
-        <input id="search-toggle" type="checkbox" checked />
-        Enable search
-      </label>
-      <div id="file-counter" class="badge">No files</div>
-    </div>
-  </header>
-
-  <main>
-    <section class="panel upload">
-      <div>
-        <div class="label">Context files</div>
-        <small>Add txt/pdf/docx/etc. They are concatenated into the prompt.</small>
-      </div>
-      <input id="file-input" type="file" multiple />
-    </section>
-
-    <section id="history" class="panel"></section>
-
-    <section class="panel input-area">
-      <textarea id="prompt" placeholder="Ask anything…" rows="3"></textarea>
-      <button id="send">Send</button>
-    </section>
-  </main>
-
-  <div id="toast" class="toast"></div>
-
-  <script>
-    const sessionId = localStorage.getItem("localchat_session") || crypto.randomUUID();
-    localStorage.setItem("localchat_session", sessionId);
-
-    const historyEl = document.getElementById("history");
-    const promptEl = document.getElementById("prompt");
-    const sendBtn = document.getElementById("send");
-    const toastEl = document.getElementById("toast");
-    const fileInput = document.getElementById("file-input");
-    const fileCounter = document.getElementById("file-counter");
-    const searchToggle = document.getElementById("search-toggle");
-
-    let assistantBubble = null;
-
-    function showToast(text) {{
-      toastEl.textContent = text;
-      toastEl.classList.add("show");
-      setTimeout(() => toastEl.classList.remove("show"), 3200);
-    }}
-
-    function addMessage(role, text) {{
-      const wrap = document.createElement("div");
-      wrap.className = "msg " + role;
-      wrap.innerText = text;
-      historyEl.appendChild(wrap);
-      historyEl.scrollTop = historyEl.scrollHeight;
-      return wrap;
-    }}
-
-    function renderAssistant(text) {{
-      if (!assistantBubble) assistantBubble = addMessage("assistant", "");
-      assistantBubble.innerText = text;
-      historyEl.scrollTop = historyEl.scrollHeight;
-    }}
-
-    function renderFinal(msg) {{
-      assistantBubble = null;
-      if (msg.thinking) {{
-        addMessage("assistant", "Reasoning:\\n" + msg.thinking);
-      }}
-      addMessage("assistant", msg.answer);
-    }}
-
-    async function sendMessage() {{
-      const prompt = promptEl.value.trim();
-      if (!prompt) return;
-      addMessage("user", prompt);
-      promptEl.value = "";
-      assistantBubble = null;
-      sendBtn.disabled = true;
-      promptEl.disabled = true;
-
-      const resp = await fetch("/api/send", {{
-        method: "POST",
-        headers: {{ "Content-Type": "application/json" }},
-        body: JSON.stringify({{
-          prompt,
-          session_id: sessionId,
-          use_search: searchToggle.checked
-        }}),
-      }});
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let aborted = false;
-
-      while (true) {{
-        const {{ value, done }} = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, {{ stream: true }});
-        const lines = buffer.split("\\n");
-        buffer = lines.pop();
-        for (const line of lines) {{
-          if (!line.trim()) continue;
-          const msg = JSON.parse(line);
-          if (msg.type === "token") {{
-            renderAssistant((assistantBubble?.innerText || "") + msg.text);
-          }} else if (msg.type === "notice") {{
-            showToast(msg.text);
-          }} else if (msg.type === "error") {{
-            showToast("Model error: " + msg.text);
-            aborted = true;
-          }} else if (msg.type === "final") {{
-            renderFinal(msg);
-          }}
-        }}
-        if (aborted) break;
-      }}
-
-      sendBtn.disabled = false;
-      promptEl.disabled = false;
-      promptEl.focus();
-    }}
-
-    sendBtn.addEventListener("click", sendMessage);
-    promptEl.addEventListener("keydown", (e) => {{
-      if (e.key === "Enter" && !e.shiftKey) {{
-        e.preventDefault();
-        sendMessage();
-      }}
-    }});
-
-    fileInput.addEventListener("change", async (e) => {{
-      const files = Array.from(e.target.files);
-      if (!files.length) return;
-      const form = new FormData();
-      form.append("session_id", sessionId);
-      for (const f of files) form.append("files", f, f.name);
-      const resp = await fetch("/api/upload", {{
-        method: "POST",
-        body: form,
-      }});
-      const data = await resp.json();
-      fileCounter.textContent = data.total_files
-        ? `${{data.total_files}} file(s) loaded`
-        : "No files";
-      showToast(`Attached ${{data.loaded_files}} file(s)`);
-      fileInput.value = "";
-    }});
-
-    // Load existing history on first paint
-    (async () => {{
-      const resp = await fetch(`/api/history?session_id=${{sessionId}}`);
-      const data = await resp.json();
-      for (const [role, text] of data.history) {{
-        addMessage(role, text);
-      }}
-    }})();
-  </script>
-</body>
-</html>
-"""
-    HTML_TEMPLATE.write_text(html, encoding="utf-8")
-
-
 if not HTML_TEMPLATE.exists():
-    build_html()
+    ensure_html_exists()
 
 
 if __name__ in {"__main__", "__mp_main__"}:
