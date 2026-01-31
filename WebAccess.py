@@ -1,26 +1,58 @@
+import os
 import requests
 
 DEFAULT_USER_AGENT = "LocalChat/1.0"
+BRAVE_ENDPOINT = os.environ.get(
+    "BRAVE_SEARCH_ENDPOINT", "https://api.search.brave.com/res/v1/web/search"
+)
+
+# Prefer a local APIkeys.py (not tracked) for secrets; fall back to env var.
+try:
+    from APIkeys import BRAVE_API_KEY as _BRAVE_API_KEY_FILE  # type: ignore
+except Exception:
+    _BRAVE_API_KEY_FILE = None
+BRAVE_API_KEY = _BRAVE_API_KEY_FILE or os.environ.get("BRAVE_API_KEY")
 
 
-def fetch_url(url: str, max_bytes: int = 8000, timeout: int = 10):
+def bravery_search(query: str, max_results: int = 5, timeout: int = 10):
     """
-    Fetch a URL and return a (text, error) tuple. Text is truncated to max_bytes.
+    Query Brave Search (Bravery method) and return (results, error).
+    Each result: {"title": str, "url": str, "snippet": str}
     """
-    if not url:
-        return "", "No URL provided"
+    if not query:
+        return [], "No query provided"
+    if not BRAVE_API_KEY:
+        return [], "BRAVE_API_KEY is not set"
+
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": DEFAULT_USER_AGENT,
+        "X-Subscription-Token": BRAVE_API_KEY,
+    }
+    params = {"q": query, "count": max_results}
+
     try:
         resp = requests.get(
-            url,
-            headers={"User-Agent": DEFAULT_USER_AGENT},
+            BRAVE_ENDPOINT,
+            headers=headers,
+            params=params,
             timeout=timeout,
         )
         resp.raise_for_status()
-        content = resp.text
-        if len(content.encode("utf-8")) > max_bytes:
-            # Trim to byte limit while keeping utf-8 decodeable
-            trimmed = content.encode("utf-8")[:max_bytes]
-            content = trimmed.decode("utf-8", errors="ignore")
-        return content.strip(), None
+        data = resp.json()
+        results = []
+        for item in data.get("web", {}).get("results", []):
+            results.append(
+                {
+                    "title": item.get("title", "").strip(),
+                    "url": item.get("url", "").strip(),
+                    "snippet": item.get("description", "").strip(),
+                }
+            )
+            if len(results) >= max_results:
+                break
+        if not results:
+            return [], "Brave Search returned no results"
+        return results, None
     except Exception as e:
-        return "", str(e)
+        return [], str(e)

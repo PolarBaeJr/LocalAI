@@ -2,9 +2,9 @@ import time
 from nicegui import app
 
 from Search import perform_search
-from WebAccess import fetch_url
+from WebAccess import bravery_search
 from UI import render_search_error
-from Debug import dbg, set_debug, add_error, add_timing, add_fetch, set_evidence
+from Debug import dbg, set_debug, add_error, add_timing, set_evidence
 
 
 def split_thinking(text: str):
@@ -36,10 +36,20 @@ def gather_context(prompt: str, web_url: str, deadline: float):
             search_error = "Search time budget exceeded before starting."
         else:
             _t_search = time.perf_counter()
-            dbg("Searching the web…")
-            search_results, search_error = perform_search(
+            dbg("Searching the web (Bravery)…")
+            search_results, search_error = bravery_search(
                 prompt, max_results=10, timeout=min(30, int(remaining))
             )
+            # fallback to legacy search if Brave isn't configured
+            if search_error and not search_results:
+                fallback_results, fallback_error = perform_search(
+                    prompt, max_results=10, timeout=min(30, int(remaining))
+                )
+                if fallback_results:
+                    search_results = fallback_results
+                    search_error = None
+                elif fallback_error:
+                    search_error = f"{search_error}; {fallback_error}"
             add_timing("search", time.perf_counter() - _t_search)
             set_debug("search", {"results": search_results, "error": search_error})
             if search_error:
