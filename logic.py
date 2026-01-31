@@ -1,8 +1,7 @@
 import time
 import streamlit as st
 
-from Search import perform_search
-from WebAccess import bravery_search
+from WebAccess import braviary_search
 from search_error import render_search_error
 from Debug import dbg, set_debug, add_error, add_timing, set_evidence
 
@@ -35,21 +34,11 @@ def gather_context(prompt: str, web_url: str, deadline: float):
             search_error = "Search time budget exceeded before starting."
         else:
             _t_search = time.perf_counter()
-            dbg("Searching the web (Brave)…")
+            dbg("Searching the web (Braviary)…")
             with st.spinner("Searching..."):
-                search_results, search_error = bravery_search(
+                search_results, search_error = braviary_search(
                     prompt, max_results=10, timeout=min(30, int(remaining))
                 )
-                # fallback to existing search if Brave not configured or failed
-                if search_error and not search_results:
-                    fallback_results, fallback_error = perform_search(
-                        prompt, max_results=10, timeout=min(30, int(remaining))
-                    )
-                    if fallback_results:
-                        search_results = fallback_results
-                        search_error = None
-                    elif fallback_error:
-                        search_error = f"{search_error}; {fallback_error}"
             add_timing("search", time.perf_counter() - _t_search)
             set_debug("search", {"results": search_results, "error": search_error})
             if search_error:

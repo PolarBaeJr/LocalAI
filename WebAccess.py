@@ -14,9 +14,9 @@ except Exception:
 BRAVE_API_KEY = _BRAVE_API_KEY_FILE or os.environ.get("BRAVE_API_KEY")
 
 
-def bravery_search(query: str, max_results: int = 5, timeout: int = 10):
+def braviary_search(query: str, max_results: int = 5, timeout: int = 10):
     """
-    Query Brave Search and return (results, error).
+    Query Brave Search and return (results, error). (Name matches user's wording.)
     Each result: {"title": str, "url": str, "snippet": str}
     """
     if not query:
@@ -58,5 +58,5 @@ def bravery_search(query: str, max_results: int = 5, timeout: int = 10):
         return [], str(e)
 
 
-# Alias to match the "braviary" wording the user uses.
-braviary_search = bravery_search
+# Backward-compatible alias
+bravery_search = braviary_search
