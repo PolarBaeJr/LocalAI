@@ -1,10 +1,8 @@
 import time
-from nicegui import app
 
 from Search import perform_search
 from WebAccess import bravery_search
-from UI import render_search_error
-from Debug import dbg, set_debug, add_error, add_timing, set_evidence
+from Debug import dbg, set_debug, add_error, add_timing, set_evidence, get_state
 
 
 def split_thinking(text: str):
@@ -22,7 +20,7 @@ def gather_context(prompt: str, web_url: str, deadline: float):
     Run search and return search_context, web_context, timed_out.
     Also records debug info and sets evidence for downstream use.
     """
-    state = app.storage.user
+    state = get_state()
     search_results = []
     search_error = None
     timed_out = False
@@ -55,7 +53,6 @@ def gather_context(prompt: str, web_url: str, deadline: float):
             if search_error:
                 add_error(str(search_error))
             dbg(f"Search returned {len(search_results)} result(s)")
-    render_search_error(search_error)
 
     search_context_lines = []
     for i, res in enumerate(search_results):
@@ -69,4 +66,4 @@ def gather_context(prompt: str, web_url: str, deadline: float):
     evidence_text = search_context.strip()
     set_evidence(evidence_text)
 
-    return search_context, web_context, timed_out
+    return search_context, web_context, timed_out, search_error

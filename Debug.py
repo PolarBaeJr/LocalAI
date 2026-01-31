@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import time
 from contextlib import contextmanager
-from nicegui import ui, app
+
+_current_state: dict | None = None
 
 
-def _state() -> dict:
-    return app.storage.user
+def attach_state(state: dict):
+    """Point debug helpers at the active session state."""
+    global _current_state
+    _current_state = state
 
 
-def init_debug():
-    state = _state()
+def get_state() -> dict:
+    if _current_state is None:
+        raise RuntimeError("Debug state is not attached")
+    return _current_state
+
+
+def init_debug(state: dict):
+    attach_state(state)
     state.setdefault("dbg_log", [])
     state.setdefault("dbg_timings", [])
     state.setdefault("dbg_errors", [])
@@ -21,40 +30,39 @@ def init_debug():
 
 
 def dbg(message: str):
-    _state()["dbg_log"].append(message)
+    get_state()["dbg_log"].append(message)
 
 
 def set_debug(key: str, value):
-    _state()["dbg_data"][key] = value
+    get_state()["dbg_data"][key] = value
 
 
 def add_error(message: str):
-    _state()["dbg_errors"].append(message)
+    get_state()["dbg_errors"].append(message)
 
 
 def add_timing(label: str, seconds: float):
-    _state()["dbg_timings"].append({"label": label, "seconds": seconds})
+    get_state()["dbg_timings"].append({"label": label, "seconds": seconds})
 
 
 def add_fetch(url: str, error: str | None):
-    _state()["dbg_fetches"].append({"url": url, "error": error})
+    get_state()["dbg_fetches"].append({"url": url, "error": error})
 
 
 def set_evidence(text: str):
-    _state()["dbg_evidence"] = text
+    get_state()["dbg_evidence"] = text
 
 
 def set_prompt(text: str):
-    _state()["dbg_prompt"] = text
+    get_state()["dbg_prompt"] = text
 
 
 @contextmanager
 def status(label: str):
-    """Lightweight status context so Main.py can wrap blocks."""
-    badge = ui.badge(label).props("color=blue").classes("self-start")
+    """Lightweight status context that records duration."""
     start = time.perf_counter()
     try:
         yield
     finally:
         elapsed = time.perf_counter() - start
-        badge.text = f"{label} (done in {elapsed:.1f}s)"
+        add_timing(label, elapsed)
