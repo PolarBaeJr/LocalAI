@@ -1,0 +1,8 @@
+# Secrets / local config
+APIkeys.py
+
+# Bytecode / caches
+__pycache__/
+
+# macOS noise
+.DS_Store
