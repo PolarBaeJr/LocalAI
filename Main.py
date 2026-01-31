@@ -174,4 +174,6 @@ if not HTML_TEMPLATE.exists():
 if __name__ in {"__main__", "__mp_main__"}:
     import uvicorn  # type: ignore
 
+    # Print a friendly URL on startup.
+    print("Local Chat running at http://localhost:7860")
     uvicorn.run(app, host="0.0.0.0", port=7860)

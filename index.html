@@ -15,6 +15,8 @@
       --muted: #9ca3af;
       --border: #1f2937;
       --text: #e5e7eb;
+      --user-avatar: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='48' fill='%23fff' stroke='%23000' stroke-width='4'/><circle cx='50' cy='40' r='16' fill='%23000'/><path d='M20 86c4-18 18-26 30-26s26 8 30 26' fill='%23000'/></svg>");
+      --bot-avatar: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 120'><circle cx='60' cy='60' r='58' fill='%230c98c7'/><rect x='30' y='32' width='60' height='50' rx='12' ry='12' fill='%23011a2a'/><rect x='38' y='40' width='44' height='34' rx='8' ry='8' fill='%23012233'/><circle cx='50' cy='57' r='6' fill='%230ef'/><circle cx='70' cy='57' r='6' fill='%230ef'/><rect x='52' y='72' width='16' height='6' rx='3' fill='%230ef'/><rect x='26' y='50' width='6' height='16' rx='3' fill='%230c98c7'/><rect x='88' y='50' width='6' height='16' rx='3' fill='%230c98c7'/><rect x='46' y='82' width='28' height='8' rx='4' fill='%23011a2a'/></svg>");
     }
     * { box-sizing: border-box; }
     body {
@@ -84,6 +86,7 @@
       display: flex;
       flex-direction: column;
       gap: 16px;
+      min-height: 0;
     }
     .panel {
       background: rgba(17, 24, 39, 0.75);
@@ -103,11 +106,30 @@
       justify-content: space-between;
       gap: 12px;
     }
+    .msg-row {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+    }
+    .avatar {
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      flex-shrink: 0;
+      background: var(--bot-avatar);
+      background-size: cover;
+      background-position: center;
+      border: 1px solid var(--border);
+      box-shadow: 0 6px 14px rgba(0,0,0,0.3);
+    }
+    .avatar.user { background: var(--user-avatar); }
+    .msg-wrap { flex: 1; }
     #history {
       display: flex;
       flex-direction: column;
       gap: 12px;
-      max-height: calc(100vh - 280px);
+      flex: 1;
+      min-height: 0;
       overflow-y: auto;
       padding-right: 4px;
     }
@@ -123,9 +145,14 @@
     .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
     .input-area {
       display: grid;
-      grid-template-columns: 1fr auto;
+      grid-template-columns: 1fr;
       gap: 10px;
-      align-items: end;
+      align-items: stretch;
+      position: sticky;
+      bottom: 0;
+      z-index: 3;
+      background: rgba(17, 24, 39, 0.9);
+      backdrop-filter: blur(6px);
     }
     textarea {
       width: 100%;
@@ -151,6 +178,32 @@
       transition: transform 120ms ease, box-shadow 120ms ease;
     }
     button:active { transform: translateY(1px); box-shadow: 0 6px 18px rgba(20,184,166,0.2); }
+    .pill {
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+      background: #0b1324;
+    }
+    .typing {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 2px solid var(--muted);
+      border-top-color: transparent;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
     .toast {
       position: fixed;
       bottom: 18px;
@@ -181,29 +234,25 @@
       Local Chat
       <span>FastAPI + custom HTML</span>
     </div>
-    <div class="controls">
-      <label class="toggle">
-        <input id="search-toggle" type="checkbox" checked />
-        Enable search
-      </label>
-      <div id="file-counter" class="badge">No files</div>
-    </div>
+    <div class="controls"></div>
   </header>
 
   <main>
-    <section class="panel upload">
-      <div>
-        <div class="label">Context files</div>
-        <small>Add txt/pdf/docx/etc. They are concatenated into the prompt.</small>
-      </div>
-      <input id="file-input" type="file" multiple />
-    </section>
-
     <section id="history" class="panel"></section>
 
     <section class="panel input-area">
       <textarea id="prompt" placeholder="Ask anything…" rows="3"></textarea>
-      <button id="send">Send</button>
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <button id="attach" type="button" style="padding:10px 12px;">Attach files</button>
+        <div id="file-counter" class="badge">No files</div>
+        <label class="toggle" style="gap:6px;">
+          <input id="search-toggle" type="checkbox" checked />
+          Enable search
+        </label>
+        <div style="flex:1 1 auto;"></div>
+        <button id="send" style="min-width:110px;">Send</button>
+        <input id="file-input" type="file" multiple hidden />
+      </div>
     </section>
   </main>
 
@@ -216,12 +265,14 @@
     const historyEl = document.getElementById("history");
     const promptEl = document.getElementById("prompt");
     const sendBtn = document.getElementById("send");
+    const attachBtn = document.getElementById("attach");
     const toastEl = document.getElementById("toast");
     const fileInput = document.getElementById("file-input");
     const fileCounter = document.getElementById("file-counter");
     const searchToggle = document.getElementById("search-toggle");
 
     let assistantBubble = null;
+    let typingEl = null;
 
     function showToast(text) {
       toastEl.textContent = text;
@@ -229,26 +280,60 @@
       setTimeout(() => toastEl.classList.remove("show"), 3200);
     }
 
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    function linkify(text) {
+      const escaped = escapeHtml(text);
+      const urlRegex = /(https?:\/\/[^\s<]+)/g;
+      const withLinks = escaped.replace(
+        urlRegex,
+        (url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`
+      );
+      return withLinks.replace(/\n/g, "<br>");
+    }
+
     function addMessage(role, text) {
+      const row = document.createElement("div");
+      row.className = "msg-row";
+      const avatar = document.createElement("div");
+      avatar.className = "avatar " + role;
+      avatar.style.backgroundImage = role === "user"
+        ? "var(--user-avatar)"
+        : "var(--bot-avatar)";
       const wrap = document.createElement("div");
       wrap.className = "msg " + role;
-      wrap.innerText = text;
-      historyEl.appendChild(wrap);
+      wrap.innerHTML = linkify(text);
+      const msgWrap = document.createElement("div");
+      msgWrap.className = "msg-wrap";
+      msgWrap.appendChild(wrap);
+      row.appendChild(avatar);
+      row.appendChild(msgWrap);
+      historyEl.appendChild(row);
       historyEl.scrollTop = historyEl.scrollHeight;
       return wrap;
     }
 
     function renderAssistant(text) {
+      if (typingEl) {
+        typingEl.remove();
+        typingEl = null;
+      }
       if (!assistantBubble) assistantBubble = addMessage("assistant", "");
-      assistantBubble.innerText = text;
+      assistantBubble.innerHTML = linkify(text);
       historyEl.scrollTop = historyEl.scrollHeight;
     }
 
     function renderFinal(msg) {
       assistantBubble = null;
       if (msg.thinking) {
-        addMessage("assistant", "Reasoning:
-" + msg.thinking);
+        addMessage("assistant", "Reasoning:\n" + msg.thinking);
       }
       addMessage("assistant", msg.answer);
     }
@@ -259,6 +344,8 @@
       addMessage("user", prompt);
       promptEl.value = "";
       assistantBubble = null;
+      if (typingEl) typingEl.remove();
+      typingEl = addTyping();
       sendBtn.disabled = true;
       promptEl.disabled = true;
 
@@ -281,8 +368,7 @@
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("
-");
+        const lines = buffer.split("\n");
         buffer = lines.pop();
         for (const line of lines) {
           if (!line.trim()) continue;
@@ -306,6 +392,25 @@
       promptEl.focus();
     }
 
+    function addTyping() {
+      const row = document.createElement("div");
+      row.className = "msg-row";
+      const avatar = document.createElement("div");
+      avatar.className = "avatar assistant";
+      avatar.style.backgroundImage = "var(--bot-avatar)";
+      const msgWrap = document.createElement("div");
+      msgWrap.className = "msg-wrap";
+      const bubble = document.createElement("div");
+      bubble.className = "msg assistant";
+      bubble.innerHTML = '<span class="typing"><span class="dot"></span> Model thinking…</span>';
+      msgWrap.appendChild(bubble);
+      row.appendChild(avatar);
+      row.appendChild(msgWrap);
+      historyEl.appendChild(row);
+      historyEl.scrollTop = historyEl.scrollHeight;
+      return row;
+    }
+
     sendBtn.addEventListener("click", sendMessage);
     promptEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -313,6 +418,8 @@
         sendMessage();
       }
     });
+
+    attachBtn.addEventListener("click", () => fileInput.click());
 
     fileInput.addEventListener("change", async (e) => {
       const files = Array.from(e.target.files);
@@ -331,6 +438,7 @@
       showToast(`Attached ${data.loaded_files} file(s)`);
       fileInput.value = "";
     });
+
 
     // Load existing history on first paint
     (async () => {

@@ -1,8 +1,7 @@
 FORMAT_HINT = (
-    "Use provided SEARCH RESULT and WEB PAGE lines as your only external knowledge. "
-    "you do have internet use it to search online"
-    "Prefer WEB PAGE content when available; cite URLs in the answer. "
-    "Show the whole process that you are reasoning"
+    "Use the SEARCH RESULT and WEB PAGE lines only as background context. "
+    "Do NOT repeat, list, or quote the raw search results or URLs; synthesize the answer in your own words. "
+    "Keep the response concise and user-facing; skip reasoning steps and metadata."
 )
 
 
