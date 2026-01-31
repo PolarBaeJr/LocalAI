@@ -331,11 +331,15 @@
     }
 
     function renderFinal(msg) {
-      assistantBubble = null;
+      // Collapse streamed + final into one bubble to avoid splitting.
+      if (!assistantBubble) assistantBubble = addMessage("assistant", "");
+      const parts = [];
       if (msg.thinking) {
-        addMessage("assistant", "Reasoning:\n" + msg.thinking);
+        parts.push(`<div class="label">Reasoning</div>${linkify(msg.thinking)}`);
       }
-      addMessage("assistant", msg.answer);
+      parts.push(linkify(msg.answer));
+      assistantBubble.innerHTML = parts.join("<div style='height:8px'></div>");
+      assistantBubble = null;
     }
 
     async function sendMessage() {

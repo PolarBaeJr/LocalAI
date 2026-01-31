@@ -1,12 +1,15 @@
 import asyncio
 import json
+import os
+import shutil
 import threading
 import time
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, Optional
 
 import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, Response
 
 from Prompt import build_prompt, build_chat_context
 from Debug import (
@@ -31,6 +34,17 @@ def get_state(session_id: str) -> dict:
     state = STATE.setdefault(session_id, {})
     apply_defaults(state)
     return state
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    """Serve a lightweight embedded favicon to avoid 404s."""
+    svg = """<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>
+<circle cx='32' cy='32' r='30' fill='#0c98c7' stroke='#0b1d30' stroke-width='4'/>
+<circle cx='32' cy='26' r='10' fill='#0b1d30'/>
+<path d='M16 52c4-14 14-18 16-18s12 4 16 18' fill='#0b1d30'/>
+</svg>"""
+    return Response(content=svg, media_type="image/svg+xml")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -171,9 +185,48 @@ if not HTML_TEMPLATE.exists():
     ensure_html_exists()
 
 
+def _start_ngrok(port: int) -> Optional[str]:
+    """
+    Optionally start an ngrok tunnel if USE_NGROK=1 and ngrok is installed.
+    Returns the public URL or None.
+    """
+    if os.environ.get("USE_NGROK", "0") != "1":
+        return None
+    if not shutil.which("ngrok"):
+        print("USE_NGROK=1 set but no ngrok binary found on PATH")
+        return None
+    # Launch ngrok in the background
+    threading.Thread(
+        target=lambda: os.system(f"ngrok http {port} > /tmp/ngrok.log 2>&1"),
+        daemon=True,
+    ).start()
+    # Poll the ngrok API for the public URL
+    for _ in range(20):
+        try:
+            resp = requests.get("http://127.0.0.1:4040/api/tunnels", timeout=1.5)
+            data = resp.json()
+            tunnels = data.get("tunnels", [])
+            if tunnels:
+                return tunnels[0].get("public_url")
+        except Exception:
+            pass
+        time.sleep(0.5)
+    print("ngrok started but no public URL found (check /tmp/ngrok.log)")
+    return None
+
+
 if __name__ in {"__main__", "__mp_main__"}:
     import uvicorn  # type: ignore
 
-    # Print a friendly URL on startup.
-    print("Local Chat running at http://localhost:7860")
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "7860"))
+
+    public_url = _start_ngrok(port)
+    print("=== Local Chat endpoints ===")
+    print(f"Local:  http://localhost:{port}")
+    if public_url:
+        print(f"Public: {public_url}  (via ngrok)")
+    else:
+        print("Public: disabled (set USE_NGROK=1 with ngrok installed to expose)")
+    print("============================")
+    uvicorn.run(app, host=host, port=port)

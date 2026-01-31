@@ -1,7 +1,13 @@
 {
     "python-envs.defaultEnvManager": "ms-python.python:conda",
     "python-envs.defaultPackageManager": "ms-python.python:conda",
-    "python-envs.pythonProjects": [],
+    "python-envs.pythonProjects": [
+        {
+            "path": "",
+            "envManager": "ms-python.python:conda",
+            "packageManager": "ms-python.python:conda"
+        }
+    ],
     "python.defaultInterpreterPath": "/Users/matthewcheng/miniforge3/envs/localai/bin/python",
     "python.terminal.activateEnvironment": true,
     "terminal.integrated.profiles.osx": {
