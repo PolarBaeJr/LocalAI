@@ -81,12 +81,86 @@
       flex: 1;
       max-width: 960px;
       width: 100%;
-      margin: 0 auto;
-      padding: 24px;
+      margin: 0;
+      padding: 0;
       display: flex;
       flex-direction: column;
       gap: 16px;
       min-height: 0;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 16px;
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 16px 16px 24px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      position: sticky;
+      top: 12px;
+      height: calc(100vh - 40px);
+    }
+    .sidebar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-weight: 600;
+    }
+    .chat-list {
+      overflow-y: auto;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .chat-item {
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #0b1324;
+      color: var(--text);
+      cursor: pointer;
+      transition: border 120ms ease, background 120ms ease;
+      position: relative;
+    }
+    .chat-item:hover { border-color: var(--accent); }
+    .chat-item.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(22,163,74,0.2);
+      background: #0f172a;
+    }
+    .chat-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .chat-delete {
+      position: absolute;
+      right: 8px;
+      top: 8px;
+      width: 22px;
+      height: 22px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #0b1324;
+      color: var(--muted);
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .chat-delete:hover { border-color: #ef4444; color: #ef4444; }
+    .chat-snippet {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
     }
     .panel {
       background: rgba(17, 24, 39, 0.75);
@@ -231,41 +305,53 @@
 <body>
   <header>
     <div class="brand">
-      Local Chat
+      Matthew C. inc
       <span>FastAPI + custom HTML</span>
     </div>
     <div class="controls"></div>
   </header>
 
-  <main>
-    <section id="history" class="panel"></section>
-
-    <section class="panel input-area">
-      <textarea id="prompt" placeholder="Ask anything…" rows="3"></textarea>
-      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-        <button id="attach" type="button" style="padding:10px 12px;">Attach files</button>
-        <div id="file-counter" class="badge">No files</div>
-        <label class="toggle" style="gap:6px;">
-          <input id="search-toggle" type="checkbox" checked />
-          Enable search
-        </label>
-        <div style="flex:1 1 auto;"></div>
-        <button id="send" style="min-width:110px;">Send</button>
-        <input id="file-input" type="file" multiple hidden />
+  <div class="layout">
+    <aside class="panel sidebar">
+      <div class="sidebar-header">
+        <div>Chats</div>
+        <button id="new-chat" class="btn-small">New</button>
       </div>
-    </section>
-  </main>
+      <div id="chat-list" class="chat-list"></div>
+    </aside>
+
+    <main>
+      <section id="history" class="panel"></section>
+
+      <section class="panel input-area">
+        <textarea id="prompt" placeholder="Ask anything…" rows="3"></textarea>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <button id="attach" type="button" style="padding:10px 12px;">Attach files</button>
+          <div id="file-counter" class="badge">No files</div>
+          <label class="toggle" style="gap:6px;">
+            <input id="search-toggle" type="checkbox" checked />
+            Enable search
+          </label>
+          <div style="flex:1 1 auto;"></div>
+          <button id="send" style="min-width:110px;">Send</button>
+          <input id="file-input" type="file" multiple hidden />
+        </div>
+      </section>
+    </main>
+  </div>
 
   <div id="toast" class="toast"></div>
 
   <script>
-    const sessionId = localStorage.getItem("localchat_session") || crypto.randomUUID();
+    let sessionId = localStorage.getItem("localchat_session") || crypto.randomUUID();
     localStorage.setItem("localchat_session", sessionId);
 
     const historyEl = document.getElementById("history");
     const promptEl = document.getElementById("prompt");
     const sendBtn = document.getElementById("send");
     const attachBtn = document.getElementById("attach");
+    const newChatBtn = document.getElementById("new-chat");
+    const chatListEl = document.getElementById("chat-list");
     const toastEl = document.getElementById("toast");
     const fileInput = document.getElementById("file-input");
     const fileCounter = document.getElementById("file-counter");
@@ -340,6 +426,7 @@
       parts.push(linkify(msg.answer));
       assistantBubble.innerHTML = parts.join("<div style='height:8px'></div>");
       assistantBubble = null;
+      fetchSessions(); // refresh sidebar summaries after assistant replies
     }
 
     async function sendMessage() {
@@ -348,6 +435,7 @@
       addMessage("user", prompt);
       promptEl.value = "";
       assistantBubble = null;
+      fetchSessions(); // update sidebar title immediately after user message
       if (typingEl) typingEl.remove();
       typingEl = addTyping();
       sendBtn.disabled = true;
@@ -444,13 +532,111 @@
     });
 
 
-    // Load existing history on first paint
-    (async () => {
-      const resp = await fetch(`/api/history?session_id=${sessionId}`);
+    async function loadHistory(id) {
+      historyEl.innerHTML = "";
+      assistantBubble = null;
+      typingEl = null;
+      const resp = await fetch(`/api/history?session_id=${id}`);
       const data = await resp.json();
       for (const [role, text] of data.history) {
         addMessage(role, text);
       }
+    }
+
+    function setActiveSession(id) {
+      sessionId = id;
+      localStorage.setItem("localchat_session", sessionId);
+      document.querySelectorAll(".chat-item").forEach((el) => {
+        el.classList.toggle("active", el.dataset.id === sessionId);
+      });
+      loadHistory(sessionId);
+    }
+
+    function summarizeText(text) {
+      if (!text) return "Empty chat";
+      const clean = text.replace(/\s+/g, " ").trim();
+      const words = clean.split(" ");
+      if (words.length <= 15) return clean;
+      return words.slice(0, 15).join(" ") + "…";
+    }
+
+    async function fetchSessions() {
+      try {
+        const resp = await fetch("/api/sessions");
+        const data = await resp.json();
+        let sessions = data.sessions || [];
+
+        // Ensure current session exists in the list so the sidebar never looks empty.
+        if (!sessions.includes(sessionId)) {
+          sessions = [...sessions, sessionId];
+        }
+
+        const summaries = await Promise.all(
+          sessions.map(async (id) => {
+            const h = await fetch(`/api/history?session_id=${id}`).then((r) => r.json());
+            const history = h.history || [];
+            const firstAssistant = history.find(([role]) => role === "assistant");
+            const firstUser = history.find(([role]) => role === "user");
+            const basis = (firstAssistant || firstUser || [null, ""])[1];
+            const summary = summarizeText(basis || "Empty chat");
+            return { id, title: summary, snippet: summary };
+          })
+        );
+        renderChatList(summaries);
+      } catch (e) {
+        console.error("Failed to fetch sessions", e);
+      }
+    }
+
+    function renderChatList(items) {
+      chatListEl.innerHTML = "";
+      if (!items.length) return;
+      for (const item of items) {
+        const div = document.createElement("div");
+        div.className = "chat-item" + (item.id === sessionId ? " active" : "");
+        div.dataset.id = item.id;
+        div.innerHTML = `<div class="chat-title">${escapeHtml(item.title)}</div>
+                         <div class="chat-snippet">${escapeHtml(item.snippet)}</div>`;
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "chat-delete";
+        del.textContent = "×";
+        del.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          await fetch(`/api/sessions/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+          if (item.id === sessionId) {
+            // pick another session if available
+            const remaining = items.filter((x) => x.id !== item.id);
+            if (remaining.length) setActiveSession(remaining[0].id);
+            else {
+              const id = crypto.randomUUID();
+              setActiveSession(id);
+            }
+          }
+          fetchSessions();
+        });
+        div.addEventListener("click", () => setActiveSession(item.id));
+        div.appendChild(del);
+        chatListEl.appendChild(div);
+      }
+    }
+
+    chatListEl.addEventListener("click", (e) => {
+      const item = e.target.closest(".chat-item");
+      if (!item) return;
+      setActiveSession(item.dataset.id);
+    });
+
+    newChatBtn.addEventListener("click", () => {
+      const id = crypto.randomUUID();
+      setActiveSession(id);
+      fetchSessions();
+    });
+
+    // Initial load
+    (async () => {
+      await loadHistory(sessionId);
+      await fetchSessions();
     })();
   </script>
 </body>

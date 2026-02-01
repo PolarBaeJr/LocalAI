@@ -26,13 +26,51 @@ app = FastAPI()
 
 # Simple in-memory session storage; keyed by client-provided session_id.
 STATE: Dict[str, dict] = {}
+SESSIONS_DIR = Path(__file__).with_name("sessions")
+SESSIONS_DIR.mkdir(exist_ok=True)
+
+
+def _sanitize_session_id(session_id: str) -> str:
+    safe = "".join(c for c in session_id if c.isalnum() or c in "-_")
+    return safe or "default"
+
+
+def _session_path(session_id: str) -> Path:
+    return SESSIONS_DIR / f"{_sanitize_session_id(session_id)}.json"
+
+
+def load_session(session_id: str) -> dict:
+    """Load a session from disk if present; otherwise return a fresh state."""
+    path = _session_path(session_id)
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+        except Exception:  # noqa: BLE001
+            pass
+    return {}
+
+
+def save_session(session_id: str, state: dict) -> None:
+    """Persist session state to disk (atomic write)."""
+    path = _session_path(session_id)
+    tmp = path.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"Failed to save session {session_id}: {exc}")
 
 
 def get_state(session_id: str) -> dict:
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
-    state = STATE.setdefault(session_id, {})
+    if session_id not in STATE:
+        STATE[session_id] = load_session(session_id)
+    state = STATE[session_id]
     apply_defaults(state)
+    save_session(session_id, state)
     return state
 
 
@@ -52,6 +90,27 @@ async def index() -> HTMLResponse:
     """Serve the lightweight HTML shell."""
     ensure_html_exists()
     return HTMLResponse(HTML_TEMPLATE.read_text(encoding="utf-8"))
+
+
+@app.get("/api/sessions")
+async def list_sessions():
+    """List known session IDs (from disk + in-memory)."""
+    disk_sessions = {
+        p.stem for p in SESSIONS_DIR.glob("*.json")
+    }
+    memory_sessions = set(STATE.keys())
+    return {"sessions": sorted(disk_sessions | memory_sessions)}
+
+
+@app.delete("/api/sessions/{session_id}")
+async def delete_session(session_id: str):
+    """Delete a session from memory and disk."""
+    sid = _sanitize_session_id(session_id)
+    STATE.pop(sid, None)
+    path = _session_path(sid)
+    if path.exists():
+        path.unlink()
+    return {"deleted": sid}
 
 
 @app.get("/api/history")
@@ -76,6 +135,7 @@ async def upload_files(
     file_count = len(
         [chunk for chunk in state["file_context"].split("FILE ") if chunk.strip()]
     )
+    save_session(session_id, state)
     return {"loaded_files": count, "total_files": file_count}
 
 
@@ -96,6 +156,7 @@ async def send(request: Request):
     state["auto_fetch_top_result"] = use_search
 
     state["history"].append(("user", prompt))
+    save_session(session_id, state)
 
     deadline = time.monotonic() + SEARCH_TIME_BUDGET
     search_context, web_context, timed_out, search_error = gather_context(
@@ -169,6 +230,7 @@ async def send(request: Request):
                 acc = "".join(acc_parts)
                 thinking, answer, has_thinking = split_thinking(acc)
                 state["history"].append(("assistant", acc))
+                save_session(session_id, state)
                 meta = {
                     "type": "final",
                     "raw": acc,
