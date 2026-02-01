@@ -119,6 +119,7 @@
       display: flex;
       flex-direction: column;
       gap: 8px;
+      padding-right: 6px;
     }
     .chat-item {
       padding: 10px 12px;
@@ -345,6 +346,11 @@
   <script>
     let sessionId = localStorage.getItem("localchat_session") || crypto.randomUUID();
     localStorage.setItem("localchat_session", sessionId);
+    let sessionIds = JSON.parse(localStorage.getItem("localchat_sessions") || "[]");
+    if (!sessionIds.includes(sessionId)) {
+      sessionIds.push(sessionId);
+      localStorage.setItem("localchat_sessions", JSON.stringify(sessionIds));
+    }
 
     const historyEl = document.getElementById("history");
     const promptEl = document.getElementById("prompt");
@@ -554,9 +560,12 @@
 
     function summarizeText(text) {
       if (!text) return "Empty chat";
+      // Focus on the main point: take the first sentence or first 15 words, whichever is shorter.
       const clean = text.replace(/\s+/g, " ").trim();
-      const words = clean.split(" ");
-      if (words.length <= 15) return clean;
+      const sentence = clean.split(/[.!?]/)[0];
+      const base = sentence || clean;
+      const words = base.split(" ");
+      if (words.length <= 15) return base;
       return words.slice(0, 15).join(" ") + "…";
     }
 
@@ -566,10 +575,9 @@
         const data = await resp.json();
         let sessions = data.sessions || [];
 
-        // Ensure current session exists in the list so the sidebar never looks empty.
-        if (!sessions.includes(sessionId)) {
-          sessions = [...sessions, sessionId];
-        }
+        // Merge with locally remembered sessions to avoid losing chats if the server list is stale.
+        const localSessions = JSON.parse(localStorage.getItem("localchat_sessions") || "[]");
+        sessions = Array.from(new Set([...sessions, ...localSessions, sessionId]));
 
         const summaries = await Promise.all(
           sessions.map(async (id) => {
@@ -583,6 +591,7 @@
           })
         );
         renderChatList(summaries);
+        localStorage.setItem("localchat_sessions", JSON.stringify(sessions));
       } catch (e) {
         console.error("Failed to fetch sessions", e);
       }
@@ -604,6 +613,9 @@
         del.addEventListener("click", async (e) => {
           e.stopPropagation();
           await fetch(`/api/sessions/${encodeURIComponent(item.id)}`, { method: "DELETE" });
+          const localSessions = JSON.parse(localStorage.getItem("localchat_sessions") || "[]")
+            .filter((sid) => sid !== item.id);
+          localStorage.setItem("localchat_sessions", JSON.stringify(localSessions));
           if (item.id === sessionId) {
             // pick another session if available
             const remaining = items.filter((x) => x.id !== item.id);
@@ -627,10 +639,21 @@
       setActiveSession(item.dataset.id);
     });
 
-    newChatBtn.addEventListener("click", () => {
-      const id = crypto.randomUUID();
-      setActiveSession(id);
-      fetchSessions();
+    newChatBtn.addEventListener("click", async () => {
+      try {
+        const resp = await fetch("/api/sessions", { method: "POST" });
+        const data = await resp.json();
+        const id = data.session_id || crypto.randomUUID();
+        setActiveSession(id);
+        await fetchSessions();
+        const localSessions = JSON.parse(localStorage.getItem("localchat_sessions") || "[]");
+        if (!localSessions.includes(id)) {
+          localSessions.push(id);
+          localStorage.setItem("localchat_sessions", JSON.stringify(localSessions));
+        }
+      } catch (e) {
+        console.error("Failed to create session", e);
+      }
     });
 
     // Initial load
