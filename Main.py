@@ -5,9 +5,11 @@ import threading
 import time
 from typing import Optional
 
+import requests
 from fastapi import FastAPI
 
 from routes import router
+from Model import get_ollama_endpoint, CLOUD_MODEL
 
 app = FastAPI()
 app.include_router(router)
@@ -57,4 +59,13 @@ if __name__ in {"__main__", "__mp_main__"}:
     else:
         print("Public: disabled (set USE_NGROK=1 with ngrok installed to expose)")
     print("============================")
+
+    try:
+        generate_url, _, selected_model = get_ollama_endpoint()
+        print(f"-- Model route: {selected_model} -> {generate_url}")
+        if selected_model == CLOUD_MODEL:
+            print("-- Debug Cloud model activated")
+    except Exception as e:
+        print(f"-- Model resolution error: {e}")
+
     uvicorn.run(app, host=host, port=port)

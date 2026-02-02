@@ -18,6 +18,12 @@ uvicorn Main:app --reload --port 7860
 ```
 Open http://localhost:7860. The assistant favicon is built-in; no static files needed.
 
+### One-liner
+```bash
+python Main.py
+USE_NGROK=1 python Main.py      # auto-starts ngrok tunnel if installed/configured
+```
+
 ## Share via ngrok (no router changes)
 ```bash
 brew install ngrok/ngrok/ngrok         # once
@@ -34,7 +40,11 @@ Terminal prints both Local and Public URLs (e.g., `https://<random>.ngrok.io`). 
 - Links in messages are clickable; multi-part answers stay in a single bubble.
 
 ## Configuration
-- `Model.py`: set `MODEL`, `OLLAMA_URL`, `SEARCH_TIME_BUDGET`.
+- `Model.py`: set `SEARCH_TIME_BUDGET`. Ollama host + model pick in this order:
+  1) `OLLAMA_HOST` env var (explicit override) → uses cloud model if pointing at `ollama.com`, else local model
+  2) reachable local daemon at `http://localhost:11434` → runs `deepseek-r1:14b`
+  3) cloud at `https://ollama.com` → runs `deepseek-v3.2:cloud` (needs `OLLAMA_API_KEY` in `APIkeys.py` or env)
+- Debug overrides: `DebugSettings.py` (off by default) or call `Debug.enable_debug_settings(force_model="cloud"|"local"|"<tag>")` to force a specific model/host choice.
 - `Config.py`: UI defaults (search on/off, auto-fetch, etc.).
 - `Prompt.py`: prompt format; search results are used as background context only.
 - `Main.py` env vars:

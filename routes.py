@@ -14,7 +14,7 @@ from Debug import (
     set_prompt,
     attach_state,
 )
-from Model import OLLAMA_URL, MODEL, SEARCH_TIME_BUDGET
+from Model import SEARCH_TIME_BUDGET, get_ollama_endpoint
 from logic import split_thinking, gather_context
 from uiconfig import HTML_TEMPLATE, ensure_html_exists
 from sid_create import (
@@ -129,11 +129,13 @@ async def send(request: Request):
 
     def model_worker():
         try:
+            generate_url, headers, model = get_ollama_endpoint()
             with requests.post(
-                OLLAMA_URL,
-                json={"model": MODEL, "prompt": full_prompt, "stream": True},
+                generate_url,
+                json={"model": model, "prompt": full_prompt, "stream": True},
                 stream=True,
                 timeout=300,
+                headers=headers,
             ) as r:
                 r.raise_for_status()
                 for line in r.iter_lines(decode_unicode=True):

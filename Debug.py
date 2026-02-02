@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import time
+import os
 from contextlib import contextmanager
 
 _current_state: dict | None = None
+_debug_env_flag = "USE_DEBUG_SETTINGS"
+_debug_force_key = "DEBUG_FORCE_MODEL"
 
 
 def attach_state(state: dict):
@@ -66,3 +69,27 @@ def status(label: str):
     finally:
         elapsed = time.perf_counter() - start
         add_timing(label, elapsed)
+
+
+def enable_debug_settings(force_model: str | None = None):
+    """
+    Opt-in to reading DebugSettings.py at runtime.
+    Optionally set a temporary forced model ("local", "cloud", or a model tag).
+    """
+    os.environ[_debug_env_flag] = "1"
+    if force_model:
+        os.environ[_debug_force_key] = force_model
+
+
+def disable_debug_settings():
+    """Stop reading DebugSettings.py overrides."""
+    os.environ.pop(_debug_env_flag, None)
+    os.environ.pop(_debug_force_key, None)
+
+
+def debug_settings_enabled() -> bool:
+    return os.environ.get(_debug_env_flag) == "1"
+
+
+def get_forced_model_env() -> str | None:
+    return os.environ.get(_debug_force_key)
