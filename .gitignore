@@ -4,5 +4,8 @@ APIkeys.py
 # Bytecode / caches
 __pycache__/
 
+# Runtime session data
+sessions/
+
 # macOS noise
 .DS_Store

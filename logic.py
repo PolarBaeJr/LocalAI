@@ -1,3 +1,4 @@
+import re
 import time
 
 from Search import perform_search
@@ -27,7 +28,16 @@ def gather_context(prompt: str, web_url: str, deadline: float):
     web_context = ""  # URL fetch removed
 
     use_search = state.get("use_search", False)
-    if use_search:
+    should_search = use_search and _needs_search(prompt)
+    set_debug(
+        "search_decision",
+        {
+            "requested": use_search,
+            "performed": should_search,
+        },
+    )
+
+    if should_search:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             timed_out = True
@@ -53,6 +63,8 @@ def gather_context(prompt: str, web_url: str, deadline: float):
             if search_error:
                 add_error(str(search_error))
             dbg(f"Search returned {len(search_results)} result(s)")
+    elif use_search:
+        dbg("Search skipped: heuristic judged prompt answerable without web search.")
 
     search_context_lines = []
     for i, res in enumerate(search_results):
@@ -67,3 +79,42 @@ def gather_context(prompt: str, web_url: str, deadline: float):
     set_evidence(evidence_text)
 
     return search_context, web_context, timed_out, search_error
+
+
+def _needs_search(prompt: str) -> bool:
+    """Lightweight heuristic to decide if web search is helpful."""
+    text = prompt.lower()
+
+    # Topics that usually need fresh data
+    fresh_keywords = [
+        "today",
+        "latest",
+        "current",
+        "breaking",
+        "news",
+        "price",
+        "prices",
+        "stock",
+        "stocks",
+        "weather",
+        "forecast",
+        "score",
+        "scores",
+        "schedule",
+        "release date",
+        "who is",
+        "ceo",
+    ]
+
+    if any(k in text for k in fresh_keywords):
+        return True
+
+    # Mentions of a specific year often imply recency questions
+    if re.search(r"\b202[3-9]\b", text):
+        return True
+
+    # URLs or explicit web references imply needing external context
+    if "http://" in text or "https://" in text:
+        return True
+
+    return False
