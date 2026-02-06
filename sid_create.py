@@ -7,7 +7,7 @@ from Debug import dbg
 from fastapi import HTTPException
 
 from Config import apply_defaults
-from Data_retension import archive_session_file, purge_expired
+from Data_retension import archive_session_file, archive_session_uploads, purge_expired
 
 # In-memory cache; persists to disk under sessions/*.json
 STATE: Dict[str, dict] = {}
@@ -59,6 +59,7 @@ def get_state(session_id: str) -> dict:
     state = STATE[session_id]
     apply_defaults(state)
     state["session_id"] = session_id
+    purge_expired()
     save_session(session_id, state)
     return state
 
@@ -75,7 +76,8 @@ def delete_session(session_id: str) -> str:
     path = _session_path(sid)
     if path.exists():
         archive_session_file(path, sid)
-        purge_expired()
+    archive_session_uploads(sid)
+    purge_expired()
     return sid
 
 

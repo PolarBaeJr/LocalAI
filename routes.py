@@ -8,6 +8,7 @@ import requests
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from io import BytesIO
 from pathlib import Path
+import uuid
 from fastapi.responses import HTMLResponse, StreamingResponse, Response
 
 from Prompt import build_prompt, build_chat_context
@@ -31,7 +32,6 @@ from sid_create import (
     delete_session as delete_session_store,
     create_session,
 )
-import uuid
 
 router = APIRouter()
 UPLOADS_DIR = Path(__file__).with_name("uploads")
@@ -98,6 +98,39 @@ async def debug_panel(session_id: str):
         "dbg_prompt": state.get("dbg_prompt", ""),
         "dbg_data": state.get("dbg_data", {}),
     }
+
+
+@router.get("/api/index_mtime")
+async def index_mtime():
+    try:
+        ensure_html_exists()
+        path = Path(__file__).with_name("index.html")
+        if not path.exists():
+            return {"mtime": 0}
+        return {"mtime": path.stat().st_mtime}
+    except Exception:  # noqa: BLE001
+        return {"mtime": 0}
+
+
+@router.get("/api/index_watch")
+async def index_watch():
+    async def event_stream():
+        ensure_html_exists()
+        path = Path(__file__).with_name("index.html")
+        last_mtime = 0.0
+        while True:
+            try:
+                mtime = path.stat().st_mtime if path.exists() else 0.0
+                if not last_mtime:
+                    last_mtime = mtime
+                elif mtime and mtime > last_mtime:
+                    last_mtime = mtime
+                    yield f"data: {json.dumps({'mtime': mtime})}\n\n"
+                await asyncio.sleep(0.5)
+            except Exception:  # noqa: BLE001
+                await asyncio.sleep(1.0)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 # Compatibility route for cached logreader clients (pre-/logs/api change).
@@ -247,6 +280,43 @@ async def send(request: Request):
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue = asyncio.Queue()
     acc_parts: List[str] = []
+    result = {
+        "acc": "",
+        "thinking": "",
+        "answer": "",
+        "has_thinking": False,
+        "saved": False,
+    }
+    request_id = uuid.uuid4().hex
+    state.setdefault("pending_requests", {})
+    state.setdefault("jobs", {})
+    state["pending_requests"][request_id] = {
+        "prompt": prompt,
+        "started_at": time.time(),
+    }
+    state["jobs"][request_id] = {
+        "id": request_id,
+        "prompt": prompt,
+        "status": "running",
+        "started_at": time.time(),
+        "updated_at": time.time(),
+        "answer": "",
+        "raw": "",
+        "thinking": "",
+        "error": "",
+    }
+    dbg(
+        "job id created "
+        + json.dumps(
+            {
+                "id": request_id,
+                "status": "running",
+                "started_at": state["jobs"][request_id]["started_at"],
+                "prompt_len": len(prompt),
+            }
+        )
+    )
+    save_session(session_id, state)
 
     def push_status(text: str):
         asyncio.run_coroutine_threadsafe(
@@ -321,13 +391,79 @@ async def send(request: Request):
                 queue.put({"type": "error", "text": str(e)}), loop
             )
             add_error(str(e))
+            state["jobs"][request_id]["status"] = "error"
+            state["jobs"][request_id]["error"] = str(e)
+            state["jobs"][request_id]["updated_at"] = time.time()
+            dbg(
+                "job id task ended "
+                + json.dumps(
+                    {
+                        "id": request_id,
+                        "status": "error",
+                        "updated_at": state["jobs"][request_id]["updated_at"],
+                        "error": str(e),
+                    }
+                )
+            )
         finally:
+            acc = "".join(acc_parts)
+            if acc:
+                thinking, answer, has_thinking = split_thinking(acc)
+                result["acc"] = acc
+                result["thinking"] = thinking
+                result["answer"] = answer if has_thinking else acc
+                result["has_thinking"] = has_thinking
+                if has_thinking:
+                    set_debug("model_thinking", thinking)
+                    dbg(f"Model thinking captured ({len(thinking)} chars)")
+                if not result["saved"]:
+                    state["history"].append(("assistant", acc))
+                    state["pending_requests"].pop(request_id, None)
+                    state["jobs"][request_id]["status"] = "done"
+                    state["jobs"][request_id]["raw"] = acc
+                    state["jobs"][request_id]["thinking"] = thinking
+                    state["jobs"][request_id]["answer"] = result["answer"]
+                    state["jobs"][request_id]["updated_at"] = time.time()
+                    dbg(
+                        "job id task ended "
+                        + json.dumps(
+                            {
+                                "id": request_id,
+                                "status": "done",
+                                "updated_at": state["jobs"][request_id]["updated_at"],
+                                "answer_len": len(state["jobs"][request_id]["answer"] or ""),
+                                "raw_len": len(state["jobs"][request_id]["raw"] or ""),
+                                "thinking_len": len(state["jobs"][request_id]["thinking"] or ""),
+                            }
+                        )
+                    )
+                    save_session(session_id, state)
+                    result["saved"] = True
+                    dbg("Response saved to history (worker)")
+            else:
+                state["pending_requests"].pop(request_id, None)
+                state["jobs"][request_id]["status"] = "error"
+                state["jobs"][request_id]["error"] = "empty response"
+                state["jobs"][request_id]["updated_at"] = time.time()
+                dbg(
+                    "job id task ended "
+                    + json.dumps(
+                        {
+                            "id": request_id,
+                            "status": "error",
+                            "updated_at": state["jobs"][request_id]["updated_at"],
+                            "error": "empty response",
+                        }
+                    )
+                )
+                save_session(session_id, state)
             push_status("Finalizing output…")
             asyncio.run_coroutine_threadsafe(queue.put({"type": "end"}), loop)
 
     threading.Thread(target=model_worker, daemon=True).start()
 
     async def event_stream():
+        yield json.dumps({"type": "job", "job_id": request_id}) + "\n"
         if search_error:
             yield json.dumps(
                 {
@@ -353,22 +489,181 @@ async def send(request: Request):
                 yield json.dumps(item) + "\n"
                 break
             elif item["type"] == "end":
-                acc = "".join(acc_parts)
-                thinking, answer, has_thinking = split_thinking(acc)
-                if has_thinking:
-                    set_debug("model_thinking", thinking)
-                    dbg(f"Model thinking captured ({len(thinking)} chars)")
-                state["history"].append(("assistant", acc))
-                save_session(session_id, state)
-                dbg("Streaming finished; response saved to history")
+                acc = result["acc"] or "".join(acc_parts)
                 push_status("Done")
                 meta = {
                     "type": "final",
                     "raw": acc,
-                    "answer": answer if has_thinking else acc,
-                    "thinking": thinking,
+                    "answer": result["answer"] if result["answer"] else acc,
+                    "thinking": result["thinking"],
                 }
                 yield json.dumps(meta) + "\n"
                 break
 
     return StreamingResponse(event_stream(), media_type="text/plain")
+
+
+@router.post("/api/send_async")
+async def send_async(request: Request):
+    payload = await request.json()
+    prompt: str = (payload.get("prompt") or "").strip()
+    session_id: str = payload.get("session_id") or ""
+    use_search: bool = bool(payload.get("use_search", False))
+    location = payload.get("location")
+    location_failed = bool(payload.get("location_failed", False))
+
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is required")
+
+    state = get_state(session_id)
+    attach_state(state)
+    init_debug(state)
+    if location_failed:
+        use_search = False
+    state["use_search"] = use_search
+    state["auto_fetch_top_result"] = use_search
+    if isinstance(location, dict) and location.get("lat") is not None and location.get("lon") is not None:
+        state["user_location"] = location
+    elif location is None:
+        pass
+    else:
+        state["user_location"] = None
+
+    state["history"].append(("user", prompt))
+
+    request_id = uuid.uuid4().hex
+    state.setdefault("pending_requests", {})
+    state.setdefault("jobs", {})
+    state["pending_requests"][request_id] = {
+        "prompt": prompt,
+        "started_at": time.time(),
+    }
+    state["jobs"][request_id] = {
+        "id": request_id,
+        "prompt": prompt,
+        "status": "running",
+        "started_at": time.time(),
+        "updated_at": time.time(),
+        "answer": "",
+        "raw": "",
+        "thinking": "",
+        "error": "",
+    }
+    dbg(
+        "job id created "
+        + json.dumps(
+            {
+                "id": request_id,
+                "status": "running",
+                "started_at": state["jobs"][request_id]["started_at"],
+                "prompt_len": len(prompt),
+            }
+        )
+    )
+    save_session(session_id, state)
+
+    def model_worker_async():
+        try:
+            deadline = time.monotonic() + SEARCH_TIME_BUDGET
+            search_context, web_context, timed_out, search_error = gather_context(
+                prompt, "", deadline
+            )
+            set_debug("search_error", search_error)
+            if search_error:
+                add_error(search_error)
+
+            chat_context = build_chat_context(state["history"])
+            file_ctx = state.get("file_context", "")
+            loc = state.get("user_location") or {}
+            location_ctx = ""
+            if isinstance(loc, dict) and loc.get("lat") is not None and loc.get("lon") is not None:
+                parts = [f"lat={loc.get('lat')}", f"lon={loc.get('lon')}"]
+                if loc.get("accuracy") is not None:
+                    parts.append(f"accuracy_m={loc.get('accuracy')}")
+                if loc.get("timestamp"):
+                    parts.append(f"timestamp={loc.get('timestamp')}")
+                location_ctx = "USER LOCATION: " + ", ".join(parts)
+            if location_ctx:
+                file_ctx = f"{location_ctx}\n\n{file_ctx}" if file_ctx else location_ctx
+
+            full_prompt = build_prompt(
+                file_ctx, search_context, web_context, chat_context
+            )
+
+            generate_url, headers, model = get_ollama_endpoint()
+            dbg(f"Async request to model={model} url={generate_url}")
+            acc_parts: List[str] = []
+            with requests.post(
+                generate_url,
+                json={"model": model, "prompt": full_prompt, "stream": True},
+                stream=True,
+                timeout=300,
+                headers=headers,
+            ) as r:
+                r.raise_for_status()
+                for line in r.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    chunk = data.get("response", "")
+                    if chunk:
+                        acc_parts.append(chunk)
+                    if data.get("done"):
+                        break
+
+            acc = "".join(acc_parts)
+            thinking, answer, has_thinking = split_thinking(acc)
+            if has_thinking:
+                set_debug("model_thinking", thinking)
+            state["history"].append(("assistant", acc))
+            state["pending_requests"].pop(request_id, None)
+            state["jobs"][request_id]["status"] = "done"
+            state["jobs"][request_id]["raw"] = acc
+            state["jobs"][request_id]["thinking"] = thinking
+            state["jobs"][request_id]["answer"] = answer if has_thinking else acc
+            state["jobs"][request_id]["updated_at"] = time.time()
+            dbg(
+                "job id task ended "
+                + json.dumps(
+                    {
+                        "id": request_id,
+                        "status": "done",
+                        "updated_at": state["jobs"][request_id]["updated_at"],
+                        "answer_len": len(state["jobs"][request_id]["answer"] or ""),
+                        "raw_len": len(state["jobs"][request_id]["raw"] or ""),
+                        "thinking_len": len(state["jobs"][request_id]["thinking"] or ""),
+                    }
+                )
+            )
+            save_session(session_id, state)
+        except Exception as e:  # noqa: BLE001
+            add_error(str(e))
+            state["pending_requests"].pop(request_id, None)
+            state["jobs"][request_id]["status"] = "error"
+            state["jobs"][request_id]["error"] = str(e)
+            state["jobs"][request_id]["updated_at"] = time.time()
+            dbg(
+                "job id task ended "
+                + json.dumps(
+                    {
+                        "id": request_id,
+                        "status": "error",
+                        "updated_at": state["jobs"][request_id]["updated_at"],
+                        "error": str(e),
+                    }
+                )
+            )
+            save_session(session_id, state)
+
+    threading.Thread(target=model_worker_async, daemon=True).start()
+    return {"job_id": request_id}
+
+
+@router.get("/api/jobs/{job_id}")
+async def get_job(job_id: str, session_id: str):
+    state = get_state(session_id)
+    attach_state(state)
+    job = state.get("jobs", {}).get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="job not found")
+    return job

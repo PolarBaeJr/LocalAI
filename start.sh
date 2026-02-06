@@ -11,8 +11,35 @@ fi
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$ROOT_DIR/Logs/run_active"
-mkdir -p "$LOG_DIR"
+LOG_ROOT="$ROOT_DIR/Logs"
+LOG_DIR="$LOG_ROOT/run_active"
+
+init_run_dir() {
+  mkdir -p "$LOG_ROOT"
+  if [[ -d "$LOG_DIR" ]]; then
+    local ts
+    ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    local archived="$LOG_ROOT/previous_${ts}"
+    mv "$LOG_DIR" "$archived" >/dev/null 2>&1 || true
+  fi
+  mkdir -p "$LOG_DIR"
+}
+
+init_run_dir
+
+finalize_run_dir() {
+  if [[ ! -d "$LOG_DIR" ]]; then
+    return
+  fi
+  echo "ok" > "$LOG_DIR/session_end.txt" 2>/dev/null || true
+  local latest="$LOG_ROOT/latest"
+  if [[ -d "$latest" ]]; then
+    local ts
+    ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "$latest" "$LOG_ROOT/previous_${ts}" >/dev/null 2>&1 || true
+  fi
+  mv "$LOG_DIR" "$latest" >/dev/null 2>&1 || true
+}
 
 # Encourage ANSI colors in child processes.
 export TERM="${TERM:-xterm-256color}"
@@ -122,7 +149,7 @@ cleanup() {
   exit 0
 }
 
-trap 'stop_services; log "All services stopped. Exiting."; exit 0' INT TERM
+trap 'stop_services; finalize_run_dir; log "All services stopped. Exiting."; exit 0' INT TERM
 trap cleanup ERR
 
 stop_services() {
@@ -140,6 +167,7 @@ stop_services() {
   pkill -x cloudflared >/dev/null 2>&1 || true
   pkill -x ollama >/dev/null 2>&1 || true
   pkill -f "python Main.py" >/dev/null 2>&1 || true
+  pkill -f "uvicorn Main:app" >/dev/null 2>&1 || true
   sleep 1
   log "Services stopped."
 }
@@ -156,8 +184,8 @@ start_cloudflare() {
     log "No ~/.cloudflared/config.yml found; skipping tunnel start."
     return 1
   fi
-  log "Starting cloudflared tunnel (stream + /tmp/cloudflared.log + $LOG_DIR/cloudflared.log)"
-  run_with_prefix "CLOUDFLARED" /tmp/cloudflared.log "$LOG_DIR/cloudflared.log" 0 \
+  log "Starting cloudflared tunnel (stream + $LOG_DIR/cloudflared.log)"
+  run_with_prefix "CLOUDFLARED" "$LOG_DIR/cloudflared.log" "$LOG_DIR/cloudflared.log" 0 \
     cloudflared tunnel --config "$HOME/.cloudflared/config.yml" run
 }
 
@@ -178,11 +206,9 @@ start_ollama() {
     log "ollama already running"
     return
   fi
-  log "Starting ollama serve (stream + /tmp/ollama.log + $LOG_DIR/ollama.log)"
-  "$ollama_bin" serve >> /tmp/ollama.log 2>&1 &
-  PIDS+=("$!")
-  # Stream ollama log to terminal and run_active separately to avoid buffering issues.
-  start_tail "OLLAMA" /tmp/ollama.log "$LOG_DIR/ollama.log"
+  log "Starting ollama serve (stream + $LOG_DIR/ollama.log)"
+  run_with_prefix "OLLAMA" "$LOG_DIR/ollama.log" "$LOG_DIR/ollama.log" 0 \
+    "$ollama_bin" serve
   # Defer readiness checks to wait_for_ollama.
   return 0
 }
@@ -191,7 +217,7 @@ start_ollama() {
 wait_for_ollama() {
   local url_primary="http://127.0.0.1:11434/api/version"
   local url_fallback="http://localhost:11434/api/version"
-  local log_file="/tmp/ollama.log"
+  local log_file="$LOG_DIR/ollama.log"
   local max_wait="${OLLAMA_STARTUP_WAIT_SECONDS:-20}"
   local start_ts
   start_ts="$(date +%s)"
@@ -219,9 +245,15 @@ wait_for_ollama() {
 }
 
 # Start the FastAPI app
+RELOAD_MODE=0
+
 start_app() {
   local port="${PORT:-7860}"
   local py_bin="${PYTHON_BIN:-/Users/matthewcheng/miniforge3/envs/LocalAI/bin/python}"
+  local reload_flag=""
+  if [[ "${RELOAD_MODE}" == "1" ]]; then
+    reload_flag="--reload"
+  fi
   if pgrep -f "python Main.py" >/dev/null 2>&1; then
     log "Main.py already running"
     return
@@ -231,7 +263,7 @@ start_app() {
     lsof -n -iTCP:"${port}" -sTCP:LISTEN -t | xargs -r kill >/dev/null 2>&1 || true
     sleep 1
   fi
-  log "Starting FastAPI server (stream + /tmp/localchat.log + $LOG_DIR/localchat.log)"
+  log "Starting FastAPI server (stream + $LOG_DIR/localchat.log)"
   cd "$ROOT_DIR"
   if [[ ! -x "$py_bin" ]]; then
     if command -v python >/dev/null 2>&1; then
@@ -243,9 +275,14 @@ start_app() {
     return 1
   fi
   log "Using python binary: $py_bin"
-  "$py_bin" -u Main.py >> /tmp/localchat.log 2>&1 &
-  PIDS+=("$!")
-  start_tail "APP" /tmp/localchat.log "$LOG_DIR/localchat.log"
+  if [[ -n "$reload_flag" ]]; then
+    log "Starting FastAPI server with uvicorn --reload"
+    run_with_prefix "APP" "$LOG_DIR/localchat.log" "$LOG_DIR/localchat.log" 0 \
+      "$py_bin" -m uvicorn Main:app --host 0.0.0.0 --port "${port}" ${reload_flag} --no-access-log
+  else
+    run_with_prefix "APP" "$LOG_DIR/localchat.log" "$LOG_DIR/localchat.log" 0 \
+      "$py_bin" -u Main.py
+  fi
   for _ in {1..5}; do
     if curl -s "http://127.0.0.1:${port}/" >/dev/null 2>&1; then
       log "Main.py started successfully."
@@ -253,7 +290,7 @@ start_app() {
     fi
     sleep 1
   done
-  log "Main.py failed to start (no HTTP response). Check /tmp/localchat.log."
+  log "Main.py failed to start (no HTTP response). Check $LOG_DIR/localchat.log."
   return 1
 }
 
@@ -266,13 +303,20 @@ start_stack() {
 }
 
 if [[ "${1:-}" == "restart" ]]; then
+  RELOAD_MODE=0
   stop_services
+  init_run_dir
+fi
+if [[ "${1:-}" == "reload" ]]; then
+  RELOAD_MODE=1
+  stop_services
+  init_run_dir
 fi
 
 start_stack
 
 log "All services launched (cloudflared, ollama, Main.py)."
-log "Type 'restart' to restart services, 'stop' to stop and exit, or Ctrl+C to stop all."
+log "Type 'restart' to restart services, 'reload' to restart with uvicorn --reload, or 'stop' to stop and exit."
 
 while true; do
   if ! read -r -t 1 cmd; then
@@ -301,8 +345,17 @@ while true; do
   case "${cmd}" in
     restart)
       stop_services
+      init_run_dir
+      RELOAD_MODE=0
       start_stack
       log "Restart complete."
+      ;;
+    reload)
+      stop_services
+      init_run_dir
+      RELOAD_MODE=1
+      start_stack
+      log "Reload mode restart complete."
       ;;
     test-info)
       emit_test_line "APP" "INFO: Test info message"
@@ -322,6 +375,7 @@ while true; do
       ;;
     stop|quit|exit)
       stop_services
+      finalize_run_dir
       log "All services stopped. Exiting."
       exit 0
       ;;

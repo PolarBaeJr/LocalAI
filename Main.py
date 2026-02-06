@@ -23,4 +23,4 @@ if __name__ in {"__main__", "__mp_main__"}:
     print_endpoints(port, public_url)
     print_model_route()
 
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, access_log=False)

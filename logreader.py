@@ -1,7 +1,9 @@
 import os
+import asyncio
+import time
 from pathlib import Path
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
 app = FastAPI()
 
@@ -17,6 +19,14 @@ def _read_log(path: Path, max_lines: int = 500) -> str:
         return "\n".join(lines[-max_lines:])
     except Exception:
         return ""
+
+
+def _resolve_log_path(name: str) -> Path:
+    name = name.lower()
+    if name not in {"localchat", "ollama", "cloudflared"}:
+        return Path()
+    path = LOG_DIR / f"{name}.log"
+    return path
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -146,9 +156,30 @@ async def index() -> HTMLResponse:
     buttons.forEach((b) => b.addEventListener("click", () => setActive(b.dataset.log)));
     setActive("localchat");
 
-    setInterval(() => {
-      if (auto.checked) fetchLog();
-    }, 2000);
+    let watcher = null;
+    function startWatcher() {
+      if (!auto.checked) return;
+      if (watcher) watcher.close();
+      const base = window.location.pathname.replace(/\/$/, "");
+      watcher = new EventSource(`${base}/api/logs_watch/${current}`);
+      watcher.onmessage = () => fetchLog();
+      watcher.onerror = () => {
+        watcher.close();
+        watcher = null;
+        setTimeout(startWatcher, 1000);
+      };
+    }
+
+    auto.addEventListener("change", () => {
+      if (auto.checked) {
+        startWatcher();
+      } else if (watcher) {
+        watcher.close();
+        watcher = null;
+      }
+    });
+
+    startWatcher();
   </script>
 </body>
 </html>
@@ -161,12 +192,37 @@ async def read_log(name: str) -> JSONResponse:
     name = name.lower()
     if name not in {"localchat", "ollama", "cloudflared"}:
         return JSONResponse({"text": "", "path": ""})
-    path = Path("/tmp") / f"{name}.log"
-    # Prefer /tmp; if missing, fall back to Logs/run_active
-    if not path.exists():
-        path = LOG_DIR / f"{name}.log"
+    path = _resolve_log_path(name)
     text = _read_log(path)
     return JSONResponse({"text": text, "path": str(path)})
+
+
+@app.get("/api/logs_watch/{name}")
+async def watch_log(name: str) -> StreamingResponse:
+    name = name.lower()
+
+    async def event_stream():
+        path = _resolve_log_path(name)
+        last_mtime = 0.0
+        last_emit = 0.0
+        while True:
+            try:
+                mtime = path.stat().st_mtime if path and path.exists() else 0.0
+                if not last_mtime:
+                    last_mtime = mtime
+                elif mtime and mtime > last_mtime:
+                    now = time.monotonic()
+                    if now - last_emit >= 1.0:
+                        last_mtime = mtime
+                        last_emit = now
+                        yield "data: {}\n\n"
+                await asyncio.sleep(0.5)
+            except Exception:
+                await asyncio.sleep(1.0)
+
+    if name not in {"localchat", "ollama", "cloudflared"}:
+        return StreamingResponse(iter(()), media_type="text/event-stream")
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 if __name__ == "__main__":

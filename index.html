@@ -264,6 +264,13 @@
       background: rgba(17, 24, 39, 0.9);
       backdrop-filter: blur(6px);
     }
+    .input-area.dragging {
+      border: 2px dashed #38bdf8;
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18);
+    }
+    .input-area.dragging textarea {
+      border-color: #38bdf8;
+    }
     textarea {
       width: 100%;
       resize: none;
@@ -361,7 +368,7 @@
     <main>
       <section id="history" class="panel"></section>
 
-      <section class="panel input-area">
+      <section id="input-area" class="panel input-area">
         <textarea id="prompt" placeholder="Ask anything…" rows="3"></textarea>
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
           <button id="attach" type="button" style="padding:10px 12px;">Attach files</button>
@@ -417,6 +424,7 @@
     const chatListEl = document.getElementById("chat-list");
     const toastEl = document.getElementById("toast");
     const fileInput = document.getElementById("file-input");
+    const inputArea = document.getElementById("input-area");
     const fileCounter = document.getElementById("file-counter");
     const searchToggle = document.getElementById("search-toggle");
     const debugToggle = document.getElementById("debug-toggle");
@@ -430,6 +438,10 @@
     const debugEvidenceEl = document.getElementById("debug-evidence");
     const debugPromptEl = document.getElementById("debug-prompt");
     const debugLogEl = document.getElementById("debug-log");
+    let isStreaming = false;
+    let activeJobId = localStorage.getItem("localchat_active_job") || "";
+    let jobPollTimer = null;
+    let indexWatcher = null;
     function locationKey(id) {
       return `localchat_location_${id}`;
     }
@@ -526,6 +538,7 @@
     }
 
     async function sendPayload(payload) {
+      isStreaming = true;
       const resp = await fetch("/api/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -548,6 +561,11 @@
           const msg = JSON.parse(line);
           if (msg.type === "token") {
             renderAssistant((assistantBubble?.innerText || "") + msg.text);
+          } else if (msg.type === "job") {
+            activeJobId = msg.job_id || "";
+            if (activeJobId) {
+              localStorage.setItem("localchat_active_job", activeJobId);
+            }
           } else if (msg.type === "notice") {
             showToast(msg.text);
           } else if (msg.type === "error") {
@@ -563,6 +581,8 @@
       sendBtn.disabled = false;
       promptEl.disabled = false;
       promptEl.focus();
+      isStreaming = false;
+      stopJobPolling();
     }
 
     async function sendMessage() {
@@ -651,6 +671,38 @@
       return row;
     }
 
+    function stopJobPolling() {
+      if (jobPollTimer) {
+        clearInterval(jobPollTimer);
+        jobPollTimer = null;
+      }
+      localStorage.removeItem("localchat_active_job");
+      activeJobId = "";
+    }
+
+    async function pollJobOnce() {
+      if (!activeJobId) return;
+      try {
+        const resp = await fetch(`/api/jobs/${activeJobId}?session_id=${sessionId}`);
+        if (!resp.ok) return;
+        const job = await resp.json();
+        if (job.status === "running") {
+          if (!typingEl) typingEl = addTyping();
+        } else {
+          stopJobPolling();
+          await loadHistory(sessionId);
+        }
+      } catch (e) {
+        // Ignore polling errors; will retry.
+      }
+    }
+
+    function startJobPolling() {
+      if (!activeJobId || jobPollTimer) return;
+      pollJobOnce();
+      jobPollTimer = setInterval(pollJobOnce, 2000);
+    }
+
     sendBtn.addEventListener("click", sendMessage);
     promptEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -684,13 +736,38 @@
     });
     debugRefresh.addEventListener("click", refreshDebug);
     debugClose.addEventListener("click", () => (debugPanel.style.display = "none"));
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && !isStreaming) {
+        if (activeJobId) {
+          if (!typingEl) typingEl = addTyping();
+          startJobPolling();
+        } else {
+          loadHistory(sessionId);
+        }
+      }
+    });
 
-    fileInput.addEventListener("change", async (e) => {
-      const files = Array.from(e.target.files);
-      if (!files.length) return;
+    function startIndexWatcher() {
+      if (indexWatcher) return;
+      indexWatcher = new EventSource("/api/index_watch");
+      indexWatcher.onmessage = () => {
+        location.reload();
+      };
+      indexWatcher.onerror = () => {
+        indexWatcher.close();
+        indexWatcher = null;
+        setTimeout(startIndexWatcher, 1000);
+      };
+    }
+
+    startIndexWatcher();
+
+    async function uploadFiles(files) {
+      const list = Array.from(files || []);
+      if (!list.length) return;
       const form = new FormData();
       form.append("session_id", sessionId);
-      for (const f of files) form.append("files", f, f.name);
+      for (const f of list) form.append("files", f, f.name);
       const resp = await fetch("/api/upload", {
         method: "POST",
         body: form,
@@ -701,6 +778,31 @@
         : "No files";
       showToast(`Attached ${data.loaded_files} file(s)`);
       fileInput.value = "";
+    }
+
+    fileInput.addEventListener("change", async (e) => {
+      await uploadFiles(e.target.files);
+    });
+
+    ["dragenter", "dragover"].forEach((evt) => {
+      inputArea.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        inputArea.classList.add("dragging");
+      });
+    });
+    ["dragleave", "drop"].forEach((evt) => {
+      inputArea.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        inputArea.classList.remove("dragging");
+      });
+    });
+    inputArea.addEventListener("drop", async (e) => {
+      const files = e.dataTransfer?.files;
+      if (files && files.length) {
+        await uploadFiles(files);
+      }
     });
 
 
