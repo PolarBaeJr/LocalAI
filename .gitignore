@@ -6,6 +6,7 @@ __pycache__/
 .DS_Store
 Logs/
 Crashlog/
+SearchHistory/
 .secrets/
 
 # Runtime session data

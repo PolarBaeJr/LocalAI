@@ -1,5 +1,8 @@
 import re
 import time
+import json
+import hashlib
+from pathlib import Path
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -195,7 +198,15 @@ def gather_context(prompt: str, web_url: str, deadline: float):
     web_context = ""  # URL fetch removed
 
     use_search = state.get("use_search", False)
-    should_search = use_search and _needs_search(prompt)
+    effective_query = _augment_query_with_location(prompt, state)
+    should_search = use_search and _needs_search(effective_query)
+    cached = _get_cached_search(state, effective_query)
+    if cached is not None:
+        search_results = cached
+        should_search = False
+        set_debug("search_cache", {"hit": True, "query": effective_query})
+    else:
+        set_debug("search_cache", {"hit": False, "query": effective_query})
     set_debug(
         "search_decision",
         {
@@ -213,12 +224,12 @@ def gather_context(prompt: str, web_url: str, deadline: float):
             _t_search = time.perf_counter()
             dbg("Searching the web (Bravery)…")
             search_results, search_error = bravery_search(
-                prompt, max_results=10, timeout=min(30, int(remaining))
+                effective_query, max_results=10, timeout=min(30, int(remaining))
             )
             # fallback to legacy search if Brave isn't configured
             if search_error and not search_results:
                 fallback_results, fallback_error = perform_search(
-                    prompt, max_results=10, timeout=min(30, int(remaining))
+                    effective_query, max_results=10, timeout=min(30, int(remaining))
                 )
                 if fallback_results:
                     search_results = fallback_results
@@ -230,6 +241,7 @@ def gather_context(prompt: str, web_url: str, deadline: float):
             if search_error:
                 add_error(str(search_error))
             dbg(f"Search returned {len(search_results)} result(s)")
+            _store_search_cache(state, effective_query, search_results)
     elif use_search:
         dbg("Search skipped: heuristic judged prompt answerable without web search.")
 
@@ -246,6 +258,80 @@ def gather_context(prompt: str, web_url: str, deadline: float):
     set_evidence(evidence_text)
 
     return search_context, web_context, timed_out, search_error
+
+
+def _augment_query_with_location(prompt: str, state: dict) -> str:
+    """If the prompt is weather-related and we have a location, add it to the query."""
+    text = prompt.strip()
+    t = text.lower()
+    if any(k in t for k in ["weather", "forecast", "temperature", "rain", "snow"]):
+        loc = state.get("user_location") or {}
+        if isinstance(loc, dict) and loc.get("lat") is not None and loc.get("lon") is not None:
+            lat = loc.get("lat")
+            lon = loc.get("lon")
+            return f"{text} near {lat},{lon}"
+    return text
+
+
+def _get_cached_search(state: dict, query: str):
+    """Return cached results for a query if present and recent."""
+    key = _normalize_query(query)
+    history = state.get("search_history") or []
+    for entry in reversed(history):
+        if entry.get("query") == key:
+            return entry.get("results", [])
+    # Fall back to disk cache
+    cached = _load_search_cache(key)
+    if cached is not None:
+        return cached
+    return None
+
+
+def _store_search_cache(state: dict, query: str, results: list):
+    history = state.get("search_history")
+    if history is None:
+        state["search_history"] = []
+        history = state["search_history"]
+    key = _normalize_query(query)
+    history.append({"query": key, "results": results, "ts": time.time()})
+    if len(history) > 20:
+        del history[0: len(history) - 20]
+    _save_search_cache(key, results)
+
+
+def _normalize_query(query: str) -> str:
+    return " ".join(query.strip().lower().split())
+
+
+def _cache_dir() -> Path:
+    cache_dir = Path(__file__).with_name("SearchHistory")
+    cache_dir.mkdir(exist_ok=True)
+    return cache_dir
+
+
+def _cache_path(query_key: str) -> Path:
+    h = hashlib.sha256(query_key.encode("utf-8")).hexdigest()[:16]
+    return _cache_dir() / f"{h}.json"
+
+
+def _load_search_cache(query_key: str):
+    path = _cache_path(query_key)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("results", [])
+    except Exception:
+        return None
+
+
+def _save_search_cache(query_key: str, results: list):
+    path = _cache_path(query_key)
+    payload = {"query": query_key, "ts": time.time(), "results": results}
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _needs_search(prompt: str) -> bool:

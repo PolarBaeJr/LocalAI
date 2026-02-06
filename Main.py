@@ -2,11 +2,13 @@ import os
 from fastapi import FastAPI
 
 from routes import router
+from logreader import app as logreader_app
 from Debug import dbg, log_active_flags
 from startup import start_tunnel, print_endpoints, print_model_route
 
 app = FastAPI()
 app.include_router(router)
+app.mount("/logs", logreader_app)
 
 
 if __name__ in {"__main__", "__mp_main__"}:

@@ -14,3 +14,4 @@ def apply_defaults(state: dict):
     state.setdefault("auto_fetch_top_result", AUTO_FETCH_TOP_RESULT_DEFAULT)
     state.setdefault("file_context", "")
     state.setdefault("user_location", None)
+    state.setdefault("search_history", [])

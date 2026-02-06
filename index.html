@@ -61,6 +61,41 @@
       align-items: center;
       gap: 12px;
     }
+    .debug-panel {
+      position: fixed;
+      right: 16px;
+      top: 76px;
+      width: min(520px, 92vw);
+      max-height: 70vh;
+      overflow: auto;
+      background: rgba(17, 24, 39, 0.95);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 12px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+      display: none;
+      z-index: 5;
+    }
+    .debug-panel h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    .debug-block {
+      background: #0b1324;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .debug-actions {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
     .toggle {
       display: inline-flex;
       align-items: center;
@@ -309,7 +344,9 @@
       Matthew C. inc
       <span>FastAPI + custom HTML</span>
     </div>
-    <div class="controls"></div>
+    <div class="controls">
+      <button id="debug-toggle" class="btn-small" type="button">Debug</button>
+    </div>
   </header>
 
   <div class="layout">
@@ -342,6 +379,26 @@
   </div>
 
   <div id="toast" class="toast"></div>
+  <section id="debug-panel" class="debug-panel">
+    <div class="debug-actions">
+      <button id="debug-refresh" class="btn-small" type="button">Refresh</button>
+      <button id="debug-close" class="btn-small" type="button">Close</button>
+    </div>
+    <h3>Debug Data</h3>
+    <div id="debug-data" class="debug-block"></div>
+    <h3>Errors</h3>
+    <div id="debug-errors" class="debug-block"></div>
+    <h3>Timings</h3>
+    <div id="debug-timings" class="debug-block"></div>
+    <h3>Fetches</h3>
+    <div id="debug-fetches" class="debug-block"></div>
+    <h3>Evidence</h3>
+    <div id="debug-evidence" class="debug-block"></div>
+    <h3>Prompt</h3>
+    <div id="debug-prompt" class="debug-block"></div>
+    <h3>Log</h3>
+    <div id="debug-log" class="debug-block"></div>
+  </section>
 
   <script>
     let sessionId = localStorage.getItem("localchat_session") || crypto.randomUUID();
@@ -362,9 +419,27 @@
     const fileInput = document.getElementById("file-input");
     const fileCounter = document.getElementById("file-counter");
     const searchToggle = document.getElementById("search-toggle");
-    let currentLocation = JSON.parse(localStorage.getItem("localchat_location") || "null");
+    const debugToggle = document.getElementById("debug-toggle");
+    const debugPanel = document.getElementById("debug-panel");
+    const debugRefresh = document.getElementById("debug-refresh");
+    const debugClose = document.getElementById("debug-close");
+    const debugDataEl = document.getElementById("debug-data");
+    const debugErrorsEl = document.getElementById("debug-errors");
+    const debugTimingsEl = document.getElementById("debug-timings");
+    const debugFetchesEl = document.getElementById("debug-fetches");
+    const debugEvidenceEl = document.getElementById("debug-evidence");
+    const debugPromptEl = document.getElementById("debug-prompt");
+    const debugLogEl = document.getElementById("debug-log");
+    function locationKey(id) {
+      return `localchat_location_${id}`;
+    }
+    function locationFailedKey(id) {
+      return `localchat_location_failed_${id}`;
+    }
+
+    let currentLocation = JSON.parse(localStorage.getItem(locationKey(sessionId)) || "null");
     let locationDirty = false;
-    let locationFailed = JSON.parse(localStorage.getItem("localchat_location_failed") || "false");
+    let locationFailed = JSON.parse(localStorage.getItem(locationFailedKey(sessionId)) || "false");
 
     let assistantBubble = null;
     let typingEl = null;
@@ -522,16 +597,16 @@
                 accuracy: pos.coords.accuracy,
                 timestamp: new Date(pos.timestamp).toISOString()
               };
-              localStorage.setItem("localchat_location", JSON.stringify(currentLocation));
+              localStorage.setItem(locationKey(sessionId), JSON.stringify(currentLocation));
               locationFailed = false;
-              localStorage.removeItem("localchat_location_failed");
+              localStorage.removeItem(locationFailedKey(sessionId));
               payload.location = currentLocation;
               sendPayload(payload);
             },
             (err) => {
               showToast("Location denied: " + err.message);
               locationFailed = true;
-              localStorage.setItem("localchat_location_failed", "true");
+              localStorage.setItem(locationFailedKey(sessionId), "true");
               payload.location_failed = true;
               sendPayload(payload);
             },
@@ -586,6 +661,30 @@
 
     attachBtn.addEventListener("click", () => fileInput.click());
 
+    async function refreshDebug() {
+      try {
+        const resp = await fetch(`/api/debug?session_id=${sessionId}`);
+        const data = await resp.json();
+        debugDataEl.textContent = JSON.stringify(data.dbg_data || {}, null, 2);
+        debugErrorsEl.textContent = JSON.stringify(data.dbg_errors || [], null, 2);
+        debugTimingsEl.textContent = JSON.stringify(data.dbg_timings || [], null, 2);
+        debugFetchesEl.textContent = JSON.stringify(data.dbg_fetches || [], null, 2);
+        debugEvidenceEl.textContent = String(data.dbg_evidence || "");
+        debugPromptEl.textContent = String(data.dbg_prompt || "");
+        debugLogEl.textContent = JSON.stringify(data.dbg_log || [], null, 2);
+      } catch (e) {
+        debugDataEl.textContent = "Failed to load debug data.";
+      }
+    }
+
+    debugToggle.addEventListener("click", () => {
+      const isOpen = debugPanel.style.display === "block";
+      debugPanel.style.display = isOpen ? "none" : "block";
+      if (!isOpen) refreshDebug();
+    });
+    debugRefresh.addEventListener("click", refreshDebug);
+    debugClose.addEventListener("click", () => (debugPanel.style.display = "none"));
+
     fileInput.addEventListener("change", async (e) => {
       const files = Array.from(e.target.files);
       if (!files.length) return;
@@ -619,6 +718,9 @@
     function setActiveSession(id) {
       sessionId = id;
       localStorage.setItem("localchat_session", sessionId);
+      currentLocation = JSON.parse(localStorage.getItem(locationKey(sessionId)) || "null");
+      locationFailed = JSON.parse(localStorage.getItem(locationFailedKey(sessionId)) || "false");
+      locationDirty = false;
       document.querySelectorAll(".chat-item").forEach((el) => {
         el.classList.toggle("active", el.dataset.id === sessionId);
       });

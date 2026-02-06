@@ -21,6 +21,7 @@ from Debug import (
 from Model import SEARCH_TIME_BUDGET, get_ollama_endpoint
 from logic import split_thinking, gather_context
 from uiconfig import HTML_TEMPLATE, ensure_html_exists
+from logreader import read_log as read_log_api
 from sid_create import (
     get_state,
     save_session,
@@ -77,6 +78,28 @@ async def history(session_id: str):
     attach_state(state)
     dbg(f"History requested for session {session_id}")
     return {"history": state["history"]}
+
+
+@router.get("/api/debug")
+async def debug_panel(session_id: str):
+    state = get_state(session_id)
+    attach_state(state)
+    dbg(f"Debug requested for session {session_id}")
+    return {
+        "dbg_log": state.get("dbg_log", []),
+        "dbg_errors": state.get("dbg_errors", []),
+        "dbg_timings": state.get("dbg_timings", []),
+        "dbg_fetches": state.get("dbg_fetches", []),
+        "dbg_evidence": state.get("dbg_evidence", ""),
+        "dbg_prompt": state.get("dbg_prompt", ""),
+        "dbg_data": state.get("dbg_data", {}),
+    }
+
+
+# Compatibility route for cached logreader clients (pre-/logs/api change).
+@router.get("/api/logs/{name}")
+async def logs_compat(name: str):
+    return await read_log_api(name)
 
 
 @router.post("/api/upload")
