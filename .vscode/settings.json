@@ -11,11 +11,11 @@
     "python.defaultInterpreterPath": "/Users/matthewcheng/miniforge3/envs/LocalAI/bin/python",
     "python.terminal.activateEnvironment": true,
     "terminal.integrated.profiles.osx": {
-        "localai (conda)": {
+        "LocalAI (conda)": {
             "path": "zsh",
-            "args": ["-l", "-c", "conda activate localai && exec zsh -l"],
+            "args": ["-l", "-c", "conda activate LocalAI && exec zsh -l"],
             "icon": "terminal-bash"
         }
     },
-    "terminal.integrated.defaultProfile.osx": "LocaAI (conda)"
+    "terminal.integrated.defaultProfile.osx": "LocalAI (conda)"
 }

@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 
 from Debug import dbg, add_error, add_timing, set_debug
@@ -85,9 +86,9 @@ def perform_search(
 
     if use_google:
         try:
-            _t = requests.utils.default_timer()
+            _t = time.perf_counter()
             google_results = _google_search(query, max_results, timeout)
-            add_timing("search_google", requests.utils.default_timer() - _t)
+            add_timing("search_google", time.perf_counter() - _t)
             if google_results:
                 dbg(f"Google search returned {len(google_results)} results")
                 return google_results[:max_results], None
@@ -98,9 +99,9 @@ def perform_search(
 
     url = search_url or DEFAULT_SEARCH_URL
     try:
-        _t = requests.utils.default_timer()
+        _t = time.perf_counter()
         ddg_results = _duckduckgo_search(query, max_results, url, timeout)
-        add_timing("search_ddg", requests.utils.default_timer() - _t)
+        add_timing("search_ddg", time.perf_counter() - _t)
         if ddg_results:
             dbg(f"DDG search returned {len(ddg_results)} results")
             return ddg_results[:max_results], None

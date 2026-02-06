@@ -105,6 +105,8 @@ async def send(request: Request):
     prompt: str = (payload.get("prompt") or "").strip()
     session_id: str = payload.get("session_id") or ""
     use_search: bool = bool(payload.get("use_search", False))
+    location = payload.get("location")
+    location_failed = bool(payload.get("location_failed", False))
 
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
@@ -113,8 +115,17 @@ async def send(request: Request):
     attach_state(state)
     init_debug(state)
     dbg(f"Send called session={session_id} prompt_len={len(prompt)} use_search={use_search}")
+    if location_failed:
+        use_search = False
     state["use_search"] = use_search
     state["auto_fetch_top_result"] = use_search
+    if isinstance(location, dict) and location.get("lat") is not None and location.get("lon") is not None:
+        state["user_location"] = location
+    elif location is None:
+        # Keep existing location unless explicitly cleared.
+        pass
+    else:
+        state["user_location"] = None
 
     state["history"].append(("user", prompt))
     save_session(session_id, state)
@@ -146,8 +157,21 @@ async def send(request: Request):
     push_status("Building prompt…")
 
     chat_context = build_chat_context(state["history"])
+    file_ctx = state.get("file_context", "")
+    loc = state.get("user_location") or {}
+    location_ctx = ""
+    if isinstance(loc, dict) and loc.get("lat") is not None and loc.get("lon") is not None:
+        parts = [f"lat={loc.get('lat')}", f"lon={loc.get('lon')}"]
+        if loc.get("accuracy") is not None:
+            parts.append(f"accuracy_m={loc.get('accuracy')}")
+        if loc.get("timestamp"):
+            parts.append(f"timestamp={loc.get('timestamp')}")
+        location_ctx = "USER LOCATION: " + ", ".join(parts)
+    if location_ctx:
+        file_ctx = f"{location_ctx}\n\n{file_ctx}" if file_ctx else location_ctx
+
     full_prompt = build_prompt(
-        state.get("file_context", ""), search_context, web_context, chat_context
+        file_ctx, search_context, web_context, chat_context
     )
     set_prompt(full_prompt)
 
@@ -217,6 +241,9 @@ async def send(request: Request):
             elif item["type"] == "end":
                 acc = "".join(acc_parts)
                 thinking, answer, has_thinking = split_thinking(acc)
+                if has_thinking:
+                    set_debug("model_thinking", thinking)
+                    dbg(f"Model thinking captured ({len(thinking)} chars)")
                 state["history"].append(("assistant", acc))
                 save_session(session_id, state)
                 dbg("Streaming finished; response saved to history")

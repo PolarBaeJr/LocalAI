@@ -18,7 +18,9 @@ _debug_force_key = "DEBUG_FORCE_MODEL"
 # Internal guard so we only print flag summary once per process.
 _flags_announced = False
 LOG_ROOT = Path(__file__).with_name("Logs")
+CRASH_ROOT = Path(__file__).with_name("Crashlog")
 LOG_ROOT.mkdir(exist_ok=True)
+CRASH_ROOT.mkdir(exist_ok=True)
 ACTIVE_DIR = LOG_ROOT / "run_active"
 _shutdown_reason = "Shutdown"
 
@@ -38,16 +40,26 @@ def _bootstrap_run_dir() -> Path:
     if ACTIVE_DIR.exists():
         # If there is no end marker, previous run likely crashed; archive it.
         if not (ACTIVE_DIR / "session_end.txt").exists():
-            crash_target = LOG_ROOT / f"crash_{_timestamp()}"
+            crash_target = CRASH_ROOT / f"crash_{_timestamp()}"
             try:
                 ACTIVE_DIR.rename(crash_target)
             except Exception:
                 pass
-        else:
-            # Clean but unarchived folder: archive with a generic suffix.
-            leftover_target = LOG_ROOT / f"previous_{_timestamp()}"
             try:
-                ACTIVE_DIR.rename(leftover_target)
+                print(f"[DEBUG:LOG] Previous run missing session_end.txt; moved to {crash_target}")
+            except Exception:
+                pass
+        else:
+            # Clean but unarchived folder: promote to "latest".
+            latest_target = LOG_ROOT / "latest"
+            if latest_target.exists():
+                archived = LOG_ROOT / f"previous_{_timestamp()}"
+                try:
+                    latest_target.rename(archived)
+                except Exception:
+                    pass
+            try:
+                ACTIVE_DIR.rename(latest_target)
             except Exception:
                 pass
     ACTIVE_DIR.mkdir(exist_ok=True)
@@ -64,7 +76,26 @@ def _to_stdout() -> bool:
 
 def _console(tag: str, message: str):
     if _to_stdout():
-        print(f"[DEBUG:{tag}] {message}")
+        try:
+            colors = {
+                "DATA": "\033[32m",   # green
+                "FLAGS": "\033[32m",  # green
+                "LOG": "\033[33m",    # yellow
+                "ERROR": "\033[31m",  # red
+                "TIME": "\033[36m",   # cyan
+                "FETCH": "\033[35m",  # magenta
+                "PROMPT": "\033[34m", # blue
+                "EVIDENCE": "\033[34m", # blue
+            }
+            color = colors.get(tag, "")
+            reset = "\033[0m" if color else ""
+            print(f"{color}[DEBUG:{tag}] {message}{reset}")
+        except BrokenPipeError:
+            # Avoid crashing when stdout is a closed pipe (e.g., tee stopped).
+            try:
+                os.environ[_debug_stdout_flag] = "0"
+            except Exception:
+                pass
 
 
 def _maybe_state():
@@ -144,7 +175,7 @@ def dbg(message: str):
     state = _maybe_state()
     if state is not None:
         _ensure_debug_keys(state)
-        state["dbg_log"].append(message)
+        state["dbg_log"].append({"timestamp": _timestamp(), "log": message})
     _console("LOG", message)
     _log_flag(f"dbg: {message}")
 
@@ -162,7 +193,7 @@ def add_error(message: str):
     state = _maybe_state()
     if state is not None:
         _ensure_debug_keys(state)
-        state["dbg_errors"].append(message)
+        state["dbg_errors"].append(f"{_timestamp()};{message}")
     _console("ERROR", message)
     _log_flag(f"error: {message}")
 
@@ -171,7 +202,9 @@ def add_timing(label: str, seconds: float):
     state = _maybe_state()
     if state is not None:
         _ensure_debug_keys(state)
-        state["dbg_timings"].append({"label": label, "seconds": seconds})
+        state["dbg_timings"].append(
+            {"timestamp": _timestamp(), "label": label, "seconds": seconds}
+        )
     _console("TIME", f"{label} = {seconds:.3f}s")
     _log_flag(f"timing {label}={seconds:.3f}s")
 
@@ -180,7 +213,9 @@ def add_fetch(url: str, error: str | None):
     state = _maybe_state()
     if state is not None:
         _ensure_debug_keys(state)
-        state["dbg_fetches"].append({"url": url, "error": error})
+        state["dbg_fetches"].append(
+            {"timestamp": _timestamp(), "url": url, "error": error}
+        )
     status = "ok" if not error else f"error: {error}"
     _console("FETCH", f"{url} ({status})")
     _log_flag(f"fetch {url} {status}")
@@ -190,7 +225,7 @@ def set_evidence(text: str):
     state = _maybe_state()
     if state is not None:
         _ensure_debug_keys(state)
-        state["dbg_evidence"] = text
+        state["dbg_evidence"] = f"{_timestamp()};{text}"
     _console("EVIDENCE", f"len={len(text)}")
     _log_flag("evidence set")
 
@@ -199,7 +234,7 @@ def set_prompt(text: str):
     state = _maybe_state()
     if state is not None:
         _ensure_debug_keys(state)
-        state["dbg_prompt"] = text
+        state["dbg_prompt"] = f"{_timestamp()};{text}"
     _console("PROMPT", f"chars={len(text)}")
     _log_flag("prompt set")
 
@@ -271,11 +306,15 @@ def _on_exit():
             encoding="utf-8",
         )
         reason_slug = _shutdown_reason.lower().replace(" ", "_")
-        target = LOG_ROOT / f"{end_ts}_{reason_slug}"
-        if target.exists():
-            target = LOG_ROOT / f"{end_ts}_end"
+        latest_target = LOG_ROOT / f"latest_{reason_slug}"
+        if latest_target.exists():
+            archived = LOG_ROOT / f"previous_{end_ts}"
+            try:
+                latest_target.rename(archived)
+            except Exception:
+                pass
         try:
-            ACTIVE_DIR.rename(target)
+            ACTIVE_DIR.rename(latest_target)
         except Exception:
             pass
     except Exception:

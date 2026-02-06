@@ -36,6 +36,8 @@ Terminal prints both Local and Public URLs (e.g., `https://<random>.ngrok.io`). 
 - Chat bar is pinned to the bottom; history scrolls above.
 - Attach context files (txt/pdf/docx/etc.) next to Send; they’re appended into the prompt.
 - “Enable search” toggle sits in the chat bar; when on, search snippets feed the model but aren’t echoed to the user.
+- “Share location” lets the browser send GPS coordinates; they’re added to the prompt as `USER LOCATION: ...`.
+- If GPS permission fails, search is skipped for that request.
 - Avatars are fixed: user = profile icon, assistant = robot; typing shows a spinner bubble.
 - Links in messages are clickable; multi-part answers stay in a single bubble.
 
@@ -44,19 +46,22 @@ Terminal prints both Local and Public URLs (e.g., `https://<random>.ngrok.io`). 
   1) `OLLAMA_HOST` env var (explicit override) → uses cloud model if pointing at `ollama.com`, else local model
   2) reachable local daemon at `http://localhost:11434` → runs `deepseek-r1:14b`
   3) cloud at `https://ollama.com` → runs `deepseek-v3.2:cloud` (needs `OLLAMA_API_KEY` in `APIkeys.py` or env)
-- Debug overrides: `DebugSettings.py` (off by default) or call `Debug.enable_debug_settings(force_model="cloud"|"local"|"<tag>")` to force a specific model/host choice.
-- `Config.py`: UI defaults (search on/off, auto-fetch, etc.).
-- `Prompt.py`: prompt format; search results are used as background context only.
+  4) if neither endpoint is reachable, the server raises an error and logs the reason
+- Debug overrides: `DebugSettings.py` (on by default here) or call `Debug.enable_debug_settings(force_model="cloud"|"local"|"<tag>")` to force a specific model/host choice.
+- `Prompt.py`: prompt format; search results are background context only. When `SHOW_THINKING` is enabled, models are asked to wrap reasoning in `<think>...</think>`.
+- `Config.py`: UI defaults (search on/off, auto-fetch, etc.) and `user_location`.
 - `Main.py` env vars:
   - `HOST` (default `0.0.0.0`), `PORT` (default `7860`)
   - `USE_NGROK=1` to auto-tunnel and print public URL
+- `SHOW_THINKING=1` to request reasoning in `<think>` tags (also stored in logs and shown in UI).
 
 ## Development tips
 - VS Code: interpreter at `.../envs/localai/bin/python`; terminals as login shells so conda activates.
 - For hot reload: `uvicorn Main:app --reload --port 7860`.
-- State is in-memory; restart clears history.
+- Sessions persist on disk in `sessions/`; restart retains history.
 
 ## Troubleshooting
 - `fastapi` import error: ensure the `localai` env is active (`conda activate localai`) before running.
 - Blank page: ensure server is on 7860; check browser console for JS errors.
 - Favicon 404: already handled by `/favicon.ico` route.
+- GPS: browser geolocation requires HTTPS or `http://localhost`.

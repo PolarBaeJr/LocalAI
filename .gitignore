@@ -5,6 +5,7 @@ APIkeys.py
 __pycache__/
 .DS_Store
 Logs/
+Crashlog/
 .secrets/
 
 # Runtime session data
@@ -14,7 +15,7 @@ sessions/
 Deleted_Data/
 
 # Logs
-logs/
+localogs/
 
 # macOS noise
 .DS_Store

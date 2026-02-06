@@ -13,3 +13,4 @@ def apply_defaults(state: dict):
     state.setdefault("use_url_fetch", USE_URL_FETCH_DEFAULT)
     state.setdefault("auto_fetch_top_result", AUTO_FETCH_TOP_RESULT_DEFAULT)
     state.setdefault("file_context", "")
+    state.setdefault("user_location", None)

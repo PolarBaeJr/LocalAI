@@ -1,36 +1,12 @@
 import re
 import time
 
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+
 from Search import perform_search
 from WebAccess import bravery_search
-from Debug import (
-    dbg,
-    set_debug,
-    add_error,
-    add_timing,
-    set_evidence,
-    get_state,
-)
-
-# Shared keyword lists used across modules.
-LOCATION_KEYWORDS = [
-    "weather",
-    "temperature",
-    "near me",
-    "closest",
-    "nearby",
-    "local time",
-    "timezone",
-    "traffic",
-    "restaurants",
-    "food near",
-    "gps",
-    "location",
-    "address",
-    "latitude",
-    "longitude",
-    "coord",
-]
+from Debug import dbg, set_debug, add_error, add_timing, set_evidence, get_state
 
 
 def split_thinking(text: str):
@@ -43,8 +19,172 @@ def split_thinking(text: str):
     return None, text.strip(), False
 
 
-def gather_context(prompt: str, web_url: str, deadline: float):
+# ---------------- Dynamic routing ("thinking") ----------------
+
+@dataclass
+class Signals:
+    ambiguity: float
+    needs_search: float
+    needs_tool: float
+    tool_name: Optional[str] = None
+
+
+def compute_signals(prompt: str) -> Signals:
+    """Compute lightweight signals that help decide what to do next."""
+    t = prompt.strip().lower()
+
+    # Ambiguity: short / vague requests tend to need clarification
+    vague_markers = [
+        "this",
+        "that",
+        "it",
+        "wrong",
+        "fix",
+        "help",
+        "why",
+        "how",
+        "explain",
+        "doesn't work",
+        "not working",
+    ]
+    ambiguity = 0.0
+    if len(t.split()) <= 6:
+        ambiguity += 0.35
+    if any(v in t for v in vague_markers):
+        ambiguity += 0.35
+    if "?" not in t and any(v in t for v in ["wrong", "fix", "not working"]):
+        ambiguity += 0.2
+    ambiguity = min(1.0, ambiguity)
+
+    # Tool detection (extend as you add tools)
+    needs_tool = 0.0
+    tool_name: Optional[str] = None
+
+    # very simple calculator detection
+    if re.search(r"\b(calc|calculate|what is)\b", t) and re.search(r"\d", t):
+        needs_tool = 0.9
+        tool_name = "calculator"
+
+    # time/date detection
+    if re.search(r"\b(time|date)\b", t):
+        needs_tool = max(needs_tool, 0.9)
+        tool_name = "time"
+
+    # Search likelihood (reuse your existing heuristic)
+    needs_search = 1.0 if _needs_search(prompt) else 0.0
+
+    return Signals(
+        ambiguity=ambiguity,
+        needs_search=needs_search,
+        needs_tool=needs_tool,
+        tool_name=tool_name,
+    )
+
+
+@dataclass
+class Step:
+    action: str  # "clarify" | "tool" | "search" | "respond"
+    args: Dict[str, str] = field(default_factory=dict)
+
+
+def make_dynamic_plan(prompt: str) -> List[Step]:
+    """Create a small plan. This is what makes the bot feel more "dynamic"."""
+    s = compute_signals(prompt)
+
+    # 1) If the prompt is too ambiguous, ask a clarifying question first.
+    if s.ambiguity >= 0.7 and s.needs_tool < 0.75 and s.needs_search < 0.5:
+        return [Step("clarify")]
+
+    # 2) Tools have highest priority when strongly detected.
+    if s.needs_tool >= 0.75 and s.tool_name:
+        return [Step("tool", {"tool": s.tool_name, "input": prompt}), Step("respond")]
+
+    # 3) Otherwise consider searching when the heuristic says it would help.
+    if s.needs_search >= 0.5:
+        return [Step("search"), Step("respond")]
+
+    # 4) Default: respond directly.
+    return [Step("respond")]
+
+
+def render_clarifying_question(prompt: str) -> str:
+    """Ask for the minimum info needed to proceed."""
+    return (
+        "I can help — quick clarifier so I don’t guess:\n"
+        "1) What’s your goal / expected output?\n"
+        "2) What’s the exact input (paste it)?\n"
+        "3) What did you get instead (error/output)?\n"
+        "If this is about your local model, paste the last 20–40 lines of logs too."
+    )
+
+
+def run_tool(tool: str, user_input: str) -> Tuple[str, Optional[str]]:
+    """Run a small built-in tool and return (result, error). Extend freely."""
+    tool = tool.lower().strip()
+
+    if tool == "time":
+        return time.strftime("%Y-%m-%d %H:%M:%S"), None
+
+    if tool == "calculator":
+        # Extract a basic arithmetic expression after common prefixes.
+        # This is intentionally conservative.
+        m = re.search(r"(?:calc|calculate|what is)\s+(.+)", user_input, re.IGNORECASE)
+        expr = (m.group(1) if m else user_input).strip()
+        if not re.fullmatch(r"[0-9\.\+\-\*\/\(\)\s]+", expr):
+            return "I can only evaluate basic arithmetic (numbers and + - * / parentheses).", None
+        try:
+            val = eval(expr, {"__builtins__": {}}, {})
+            return str(val), None
+        except Exception as e:
+            return "I couldn't evaluate that expression.", str(e)
+
+    return "Unknown tool.", f"Unknown tool: {tool}"
+
+
+def dynamic_think_and_gather(prompt: str, web_url: str, deadline: float):
+    """High-level decision layer.
+
+    Returns (mode, search_context, web_context, timed_out, error, tool_result)
+    where mode is one of: "clarify" | "tool" | "direct" | "search"
     """
+    plan = make_dynamic_plan(prompt)
+    set_debug("dynamic_plan", [s.action for s in plan])
+
+    tool_result: Optional[str] = None
+    error: Optional[str] = None
+
+    # Execute a tiny multi-step plan. This is where you can expand later.
+    for step in plan:
+        if step.action == "clarify":
+            return "clarify", "", "", False, None, None
+
+        if step.action == "tool":
+            _t = time.perf_counter()
+            tool_name = step.args.get("tool", "")
+            tool_result, err = run_tool(tool_name, step.args.get("input", ""))
+            add_timing(f"tool:{tool_name}", time.perf_counter() - _t)
+            if err:
+                add_error(err)
+                error = err
+            set_debug("tool", {"tool": tool_name, "result": tool_result, "error": err})
+
+        if step.action == "search":
+            # Defer to existing search machinery
+            search_context, web_context, timed_out, search_error = gather_context(
+                prompt, web_url, deadline
+            )
+            # If gather_context already timed out or errored, bubble it up
+            if search_error:
+                error = str(search_error)
+            mode = "search" if search_context else "direct"
+            return mode, search_context, web_context, timed_out, error, tool_result
+
+    # If we got here, we're either tool-only or direct.
+    return ("tool" if tool_result is not None else "direct"), "", "", False, error, tool_result
+
+
+def gather_context(prompt: str, web_url: str, deadline: float):
+    """Search-only context gatherer.
     Run search and return search_context, web_context, timed_out.
     Also records debug info and sets evidence for downstream use.
     """
@@ -63,14 +203,12 @@ def gather_context(prompt: str, web_url: str, deadline: float):
             "performed": should_search,
         },
     )
-    dbg(f"use_search={use_search}, heuristic_decision={should_search}")
 
     if should_search:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             timed_out = True
             search_error = "Search time budget exceeded before starting."
-            dbg("Search aborted: no remaining time budget")
         else:
             _t_search = time.perf_counter()
             dbg("Searching the web (Bravery)…")
@@ -106,7 +244,6 @@ def gather_context(prompt: str, web_url: str, deadline: float):
 
     evidence_text = search_context.strip()
     set_evidence(evidence_text)
-    dbg(f"Evidence length recorded: {len(evidence_text)} chars")
 
     return search_context, web_context, timed_out, search_error
 
@@ -148,3 +285,42 @@ def _needs_search(prompt: str) -> bool:
         return True
 
     return False
+
+
+def decide_next_action(prompt: str, web_url: str = "", budget_s: float = 30.0):
+    """Convenience wrapper: decide whether to clarify, run a tool, search, or answer directly.
+
+    Returns a dict with keys:
+      - mode: "clarify" | "tool" | "direct" | "search"
+      - tool_result: optional string
+      - search_context: optional string
+      - web_context: optional string
+      - timed_out: bool
+      - error: optional string
+    """
+    deadline = time.monotonic() + float(budget_s)
+    mode, search_context, web_context, timed_out, error, tool_result = dynamic_think_and_gather(
+        prompt=prompt,
+        web_url=web_url,
+        deadline=deadline,
+    )
+    if mode == "clarify":
+        return {
+            "mode": mode,
+            "message": render_clarifying_question(prompt),
+            "tool_result": None,
+            "search_context": "",
+            "web_context": "",
+            "timed_out": False,
+            "error": None,
+        }
+
+    return {
+        "mode": mode,
+        "message": "",
+        "tool_result": tool_result,
+        "search_context": search_context,
+        "web_context": web_context,
+        "timed_out": timed_out,
+        "error": error,
+    }

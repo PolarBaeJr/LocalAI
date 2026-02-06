@@ -362,6 +362,9 @@
     const fileInput = document.getElementById("file-input");
     const fileCounter = document.getElementById("file-counter");
     const searchToggle = document.getElementById("search-toggle");
+    let currentLocation = JSON.parse(localStorage.getItem("localchat_location") || "null");
+    let locationDirty = false;
+    let locationFailed = JSON.parse(localStorage.getItem("localchat_location_failed") || "false");
 
     let assistantBubble = null;
     let typingEl = null;
@@ -370,6 +373,18 @@
       toastEl.textContent = text;
       toastEl.classList.add("show");
       setTimeout(() => toastEl.classList.remove("show"), 3200);
+    }
+
+    function isLocationPrompt(text) {
+      const t = text.toLowerCase();
+      const keywords = [
+        "near me", "nearby", "closest", "nearest", "around me",
+        "weather", "forecast", "temperature", "rain", "snow",
+        "location", "where am i", "local", "map",
+        "distance", "directions", "address", "timezone"
+      ];
+      if (keywords.some((k) => t.includes(k))) return true;
+      return /\b[-+]?[0-9]{1,3}\.[0-9]{3,}\b/.test(t);
     }
 
     function escapeHtml(str) {
@@ -435,26 +450,11 @@
       fetchSessions(); // refresh sidebar summaries after assistant replies
     }
 
-    async function sendMessage() {
-      const prompt = promptEl.value.trim();
-      if (!prompt) return;
-      addMessage("user", prompt);
-      promptEl.value = "";
-      assistantBubble = null;
-      fetchSessions(); // update sidebar title immediately after user message
-      if (typingEl) typingEl.remove();
-      typingEl = addTyping();
-      sendBtn.disabled = true;
-      promptEl.disabled = true;
-
+    async function sendPayload(payload) {
       const resp = await fetch("/api/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt,
-          session_id: sessionId,
-          use_search: searchToggle.checked
-        }),
+        body: JSON.stringify(payload),
       });
 
       const reader = resp.body.getReader();
@@ -488,6 +488,73 @@
       sendBtn.disabled = false;
       promptEl.disabled = false;
       promptEl.focus();
+    }
+
+    async function sendMessage() {
+      const prompt = promptEl.value.trim();
+      if (!prompt) return;
+      addMessage("user", prompt);
+      promptEl.value = "";
+      assistantBubble = null;
+      fetchSessions(); // update sidebar title immediately after user message
+      if (typingEl) typingEl.remove();
+      typingEl = addTyping();
+      sendBtn.disabled = true;
+      promptEl.disabled = true;
+
+      const needsLocation = isLocationPrompt(prompt);
+      const payload = {
+        prompt,
+        session_id: sessionId,
+        use_search: searchToggle.checked
+      };
+
+      if (needsLocation) {
+        if (currentLocation) {
+          payload.location = currentLocation;
+        } else if (navigator.geolocation) {
+          showToast("Requesting location…");
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              currentLocation = {
+                lat: pos.coords.latitude,
+                lon: pos.coords.longitude,
+                accuracy: pos.coords.accuracy,
+                timestamp: new Date(pos.timestamp).toISOString()
+              };
+              localStorage.setItem("localchat_location", JSON.stringify(currentLocation));
+              locationFailed = false;
+              localStorage.removeItem("localchat_location_failed");
+              payload.location = currentLocation;
+              sendPayload(payload);
+            },
+            (err) => {
+              showToast("Location denied: " + err.message);
+              locationFailed = true;
+              localStorage.setItem("localchat_location_failed", "true");
+              payload.location_failed = true;
+              sendPayload(payload);
+            },
+            { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 }
+          );
+          return;
+        } else {
+          showToast("Geolocation is not supported in this browser.");
+          locationFailed = true;
+          localStorage.setItem("localchat_location_failed", "true");
+          payload.location_failed = true;
+        }
+      }
+
+      if (locationFailed) {
+        payload.location_failed = true;
+      }
+      if (locationDirty) {
+        payload.location = currentLocation || {};
+        locationDirty = false;
+      }
+
+      sendPayload(payload);
     }
 
     function addTyping() {

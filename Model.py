@@ -3,20 +3,21 @@ Ollama endpoint selection: prefer explicit host, then local daemon, then cloud.
 """
 
 import os
-from typing import Dict, Tuple
+import time
+from typing import Any, Dict, Tuple
 
 import requests
 
 try:
     from Debug import dbg, set_debug, add_error
 except Exception:  # pragma: no cover - fallback when Debug import fails
-    def dbg(msg: str):
+    def dbg(message: str) -> None:
         return None
 
-    def set_debug(key: str, value):
+    def set_debug(key: str, value: Any) -> None:
         return None
 
-    def add_error(msg: str):
+    def add_error(message: str) -> None:
         return None
 
 # Prefer a local APIkeys.py (gitignored) for secrets; fall back to env var.
@@ -37,7 +38,7 @@ except Exception:  # pragma: no cover - during early import
     def debug_settings_enabled() -> bool:
         return False
 
-    def get_forced_model_env():
+    def get_forced_model_env() -> str | None:
         return None
 
 LOCAL_MODEL = "deepseek-r1:14b"
@@ -46,6 +47,7 @@ SEARCH_TIME_BUDGET = 180  # seconds max for all search activity per message
 
 DEFAULT_LOCAL_BASE = os.environ.get("OLLAMA_LOCAL_BASE", "http://localhost:11434")
 DEFAULT_CLOUD_BASE = os.environ.get("OLLAMA_CLOUD_BASE", "https://ollama.com")
+LOCAL_STARTUP_GRACE_S = float(os.environ.get("OLLAMA_LOCAL_WAIT_SECONDS", "8"))
 
 
 def _normalize_base(host: str) -> str:
@@ -161,12 +163,36 @@ def get_ollama_endpoint(timeout: float = 0.8) -> Tuple[str, Dict[str, str], str]
 
     if _is_up(DEFAULT_LOCAL_BASE, timeout=timeout):
         base = _normalize_base(DEFAULT_LOCAL_BASE)
+        set_debug("endpoint_reason", "local_reachable")
         dbg(f"Selected reachable local Ollama at {base}")
         return _generate_url(base), {}, LOCAL_MODEL
+    if LOCAL_STARTUP_GRACE_S > 0:
+        set_debug("endpoint_reason", "local_wait")
+        wait_msg = f"Local Ollama not reachable; waiting up to {LOCAL_STARTUP_GRACE_S:.0f}s"
+        dbg(wait_msg)
+        print(wait_msg)
+        start = time.monotonic()
+        while time.monotonic() - start < LOCAL_STARTUP_GRACE_S:
+            remaining = int(LOCAL_STARTUP_GRACE_S - (time.monotonic() - start))
+            tick_msg = f"Waiting for local Ollama... {max(0, remaining)}s"
+            dbg(tick_msg)
+            print(tick_msg)
+            time.sleep(1)
+            if _is_up(DEFAULT_LOCAL_BASE, timeout=timeout):
+                base = _normalize_base(DEFAULT_LOCAL_BASE)
+                set_debug("endpoint_reason", "local_recovered")
+                dbg(f"Local Ollama became reachable at {base}")
+                return _generate_url(base), {}, LOCAL_MODEL
 
     cloud_base = _normalize_base(DEFAULT_CLOUD_BASE)
-    dbg(f"Defaulting to cloud Ollama at {cloud_base}")
-    return _generate_url(cloud_base), _auth_headers(cloud_base, require_key=True), CLOUD_MODEL
+    if _is_up(cloud_base, timeout=timeout):
+        set_debug("endpoint_reason", "cloud_fallback")
+        dbg(f"Defaulting to cloud Ollama at {cloud_base}")
+        return _generate_url(cloud_base), _auth_headers(cloud_base, require_key=True), CLOUD_MODEL
+
+    set_debug("endpoint_reason", "no_endpoint")
+    add_error("No reachable Ollama endpoint (local or cloud).")
+    raise RuntimeError("No reachable Ollama endpoint (local or cloud).")
 
 
 # Default fallback so existing imports still work; will be overridden at runtime.

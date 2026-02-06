@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 
 from Debug import dbg, add_error, add_fetch, add_timing
@@ -36,7 +37,7 @@ def bravery_search(query: str, max_results: int = 5, timeout: int = 10):
     params = {"q": query, "count": max_results}
 
     try:
-        _t = requests.utils.default_timer()
+        _t = time.perf_counter()
         resp = requests.get(
             BRAVE_ENDPOINT,
             headers=headers,
@@ -59,7 +60,7 @@ def bravery_search(query: str, max_results: int = 5, timeout: int = 10):
         if not results:
             return [], "Brave Search returned no results"
         add_fetch(BRAVE_ENDPOINT, None)
-        add_timing("search_brave", requests.utils.default_timer() - _t)
+        add_timing("search_brave", time.perf_counter() - _t)
         dbg(f"Bravery search returned {len(results)} results")
         return results, None
     except Exception as e:

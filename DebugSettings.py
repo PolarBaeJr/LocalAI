@@ -8,5 +8,6 @@ Optional debug overrides.
     "<model tag>"   -> force a specific model string
 """
 
-ENABLE_DEBUG_SETTINGS = False
+ENABLE_DEBUG_SETTINGS = True
 FORCE_MODEL: str | None = None
+SHOW_THINKING = True
