@@ -4,9 +4,8 @@ APIkeys.py
 # Bytecode / caches
 __pycache__/
 .DS_Store
-Logs/
-Crashlog/
-SearchHistory/
+
+#Api Keys
 .secrets/
 
 # Runtime session data
@@ -16,7 +15,12 @@ sessions/
 Deleted_Data/
 
 # Logs
-localogs/
+Logs/
+Crashlog/
+SearchHistory/
 
 # macOS noise
 .DS_Store
+
+# File Uploads
+uploads/

@@ -6,6 +6,8 @@ from typing import List
 
 import requests
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from io import BytesIO
+from pathlib import Path
 from fastapi.responses import HTMLResponse, StreamingResponse, Response
 
 from Prompt import build_prompt, build_chat_context
@@ -32,6 +34,8 @@ from sid_create import (
 import uuid
 
 router = APIRouter()
+UPLOADS_DIR = Path(__file__).with_name("uploads")
+UPLOADS_DIR.mkdir(exist_ok=True)
 
 
 @router.get("/favicon.ico", include_in_schema=False)
@@ -106,20 +110,107 @@ async def logs_compat(name: str):
 async def upload_files(
     session_id: str = Form(...), files: List[UploadFile] = File(...)
 ):
+    def sanitize_filename(name: str) -> str:
+        base = Path(name).name
+        safe = "".join(c for c in base if c.isalnum() or c in "._- ")
+        return safe or "upload.bin"
+
+    def is_probably_text(data: bytes) -> bool:
+        if not data:
+            return True
+        sample = data[:4096]
+        if b"\x00" in sample:
+            return False
+        printable = 0
+        for b in sample:
+            if b in (9, 10, 13) or 32 <= b <= 126:
+                printable += 1
+        return (printable / len(sample)) >= 0.7
+
+    def extract_text(filename: str, content: bytes) -> str:
+        if is_probably_text(content):
+            return content.decode("utf-8", errors="ignore")
+
+        ext = Path(filename).suffix.lower()
+        if ext == ".pdf":
+            try:
+                from pypdf import PdfReader  # type: ignore
+            except Exception:  # noqa: BLE001
+                try:
+                    from PyPDF2 import PdfReader  # type: ignore
+                except Exception:  # noqa: BLE001
+                    PdfReader = None  # type: ignore
+
+            if PdfReader is not None:
+                try:
+                    reader = PdfReader(BytesIO(content))
+                    parts: List[str] = []
+                    for page in reader.pages:
+                        text = page.extract_text() or ""
+                        if text:
+                            parts.append(text)
+                    return "\n".join(parts)
+                except Exception:  # noqa: BLE001
+                    return ""
+            return ""
+
+        if ext == ".docx":
+            try:
+                from docx import Document  # type: ignore
+                doc = Document(BytesIO(content))
+                return "\n".join(p.text for p in doc.paragraphs if p.text)
+            except Exception:  # noqa: BLE001
+                return ""
+
+        return ""
+
     state = get_state(session_id)
     attach_state(state)
     dbg(f"Upload received: {len(files)} files for session {session_id}")
     count = 0
+    skipped: List[str] = []
+    stored: List[str] = []
+    state.setdefault("uploaded_files", [])
+    session_dir = UPLOADS_DIR / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
     for file in files:
         content = await file.read()
-        text = content.decode("utf-8", errors="ignore")
-        state["file_context"] += f"FILE {file.filename}:\n{text.strip()}\n\n"
-        count += 1
+        safe_name = sanitize_filename(file.filename)
+        file_path = session_dir / safe_name
+        try:
+            file_path.write_bytes(content)
+            stored.append(safe_name)
+            state["uploaded_files"].append(
+                {
+                    "name": file.filename,
+                    "stored_name": safe_name,
+                    "path": str(file_path),
+                    "size": len(content),
+                    "content_type": file.content_type,
+                }
+            )
+        except Exception:  # noqa: BLE001
+            skipped.append(file.filename)
+            continue
+
+        extracted = extract_text(file.filename, content).strip()
+        if extracted:
+            state["file_context"] += f"FILE {file.filename}:\n{extracted}\n\n"
+            count += 1
+        else:
+            state["file_context"] += (
+                f"FILE {file.filename}:\n[stored, no text extracted]\n\n"
+            )
     file_count = len(
         [chunk for chunk in state["file_context"].split("FILE ") if chunk.strip()]
     )
     save_session(session_id, state)
-    return {"loaded_files": count, "total_files": file_count}
+    return {
+        "loaded_files": count,
+        "total_files": file_count,
+        "stored_files": stored,
+        "skipped_files": skipped,
+    }
 
 
 @router.post("/api/send")
