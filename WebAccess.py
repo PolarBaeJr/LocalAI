@@ -1,6 +1,8 @@
 import os
 import requests
 
+from Debug import dbg, add_error, add_fetch, add_timing
+
 DEFAULT_USER_AGENT = "LocalChat/1.0"
 BRAVE_ENDPOINT = os.environ.get(
     "BRAVE_SEARCH_ENDPOINT", "https://api.search.brave.com/res/v1/web/search"
@@ -20,8 +22,10 @@ def bravery_search(query: str, max_results: int = 5, timeout: int = 10):
     Each result: {"title": str, "url": str, "snippet": str}
     """
     if not query:
+        dbg("Bravery search skipped: empty query")
         return [], "No query provided"
     if not BRAVE_API_KEY:
+        dbg("Bravery search skipped: missing BRAVE_API_KEY")
         return [], "BRAVE_API_KEY is not set"
 
     headers = {
@@ -32,6 +36,7 @@ def bravery_search(query: str, max_results: int = 5, timeout: int = 10):
     params = {"q": query, "count": max_results}
 
     try:
+        _t = requests.utils.default_timer()
         resp = requests.get(
             BRAVE_ENDPOINT,
             headers=headers,
@@ -53,6 +58,11 @@ def bravery_search(query: str, max_results: int = 5, timeout: int = 10):
                 break
         if not results:
             return [], "Brave Search returned no results"
+        add_fetch(BRAVE_ENDPOINT, None)
+        add_timing("search_brave", requests.utils.default_timer() - _t)
+        dbg(f"Bravery search returned {len(results)} results")
         return results, None
     except Exception as e:
+        add_fetch(BRAVE_ENDPOINT, str(e))
+        add_error(str(e))
         return [], str(e)

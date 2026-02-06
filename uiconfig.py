@@ -85,6 +85,34 @@ def build_html() -> None:
       border: 1px solid var(--border);
       color: var(--muted);
     }}
+    .status-bar {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      padding: 4px 2px;
+    }}
+    .status-dot {{
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--muted);
+      position: relative;
+    }}
+    .status-dot.ping::after {{
+      content: "";
+      position: absolute;
+      inset: -6px;
+      border: 2px solid var(--accent);
+      border-radius: 999px;
+      opacity: 0;
+      animation: ping 1s cubic-bezier(0, 0.2, 0.8, 1) infinite;
+    }}
+    @keyframes ping {{
+      0% {{ transform: scale(0.65); opacity: 0.9; }}
+      75%, 100% {{ transform: scale(1.6); opacity: 0; }}
+    }}
     main {{
       flex: 1;
       max-width: 960px;
@@ -209,6 +237,11 @@ def build_html() -> None:
       <input id="file-input" type="file" multiple />
     </section>
 
+    <div class="status-bar">
+      <span id="status-dot" class="status-dot"></span>
+      <span id="status-text">Idle</span>
+    </div>
+
     <section id="history" class="panel"></section>
 
     <section class="panel input-area">
@@ -230,6 +263,8 @@ def build_html() -> None:
     const fileInput = document.getElementById("file-input");
     const fileCounter = document.getElementById("file-counter");
     const searchToggle = document.getElementById("search-toggle");
+    const statusText = document.getElementById("status-text");
+    const statusDot = document.getElementById("status-dot");
 
     let assistantBubble = null;
 
@@ -262,6 +297,10 @@ def build_html() -> None:
       addMessage("assistant", msg.answer);
     }}
 
+    function setStatus(text, busy = true) {{
+      statusText.textContent = text;
+      statusDot.classList.toggle("ping", busy);
+    }}
     async function sendMessage() {{
       const prompt = promptEl.value.trim();
       if (!prompt) return;
@@ -270,6 +309,7 @@ def build_html() -> None:
       assistantBubble = null;
       sendBtn.disabled = true;
       promptEl.disabled = true;
+      setStatus("Sending prompt…", true);
 
       const resp = await fetch("/api/send", {{
         method: "POST",
@@ -297,13 +337,20 @@ def build_html() -> None:
           const msg = JSON.parse(line);
           if (msg.type === "token") {{
             renderAssistant((assistantBubble?.innerText || "") + msg.text);
+            setStatus("Receiving response…", true);
           }} else if (msg.type === "notice") {{
             showToast(msg.text);
           }} else if (msg.type === "error") {{
             showToast("Model error: " + msg.text);
             aborted = true;
+            setStatus("Idle", false);
           }} else if (msg.type === "final") {{
             renderFinal(msg);
+            setStatus("Idle", false);
+          }} else if (msg.type === "status") {{
+            const lower = msg.text.toLowerCase();
+            const busy = !(lower === "done" || lower.startsWith("model error"));
+            setStatus(msg.text, busy);
           }}
         }}
         if (aborted) break;
@@ -312,6 +359,7 @@ def build_html() -> None:
       sendBtn.disabled = false;
       promptEl.disabled = false;
       promptEl.focus();
+      if (!aborted) setStatus("Idle", false);
     }}
 
     sendBtn.addEventListener("click", sendMessage);

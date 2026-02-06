@@ -3,9 +3,18 @@ APIkeys.py
 
 # Bytecode / caches
 __pycache__/
+.DS_Store
+Logs/
+.secrets/
 
 # Runtime session data
 sessions/
+
+#Deleted Data
+Deleted_Data/
+
+# Logs
+logs/
 
 # macOS noise
 .DS_Store

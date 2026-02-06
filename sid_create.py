@@ -3,9 +3,11 @@ from pathlib import Path
 from typing import Dict, Optional
 import uuid
 
+from Debug import dbg
 from fastapi import HTTPException
 
 from Config import apply_defaults
+from Data_retension import archive_session_file, purge_expired
 
 # In-memory cache; persists to disk under sessions/*.json
 STATE: Dict[str, dict] = {}
@@ -29,9 +31,11 @@ def load_session(session_id: str) -> dict:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                dbg(f"Session {session_id} loaded from disk")
                 return data
         except Exception:  # noqa: BLE001
             pass
+    dbg(f"Session {session_id} new or unreadable; creating fresh state")
     return {}
 
 
@@ -42,6 +46,7 @@ def save_session(session_id: str, state: dict) -> None:
     try:
         tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(path)
+        dbg(f"Session {session_id} saved to disk")
     except Exception as exc:  # noqa: BLE001
         print(f"Failed to save session {session_id}: {exc}")
 
@@ -53,6 +58,7 @@ def get_state(session_id: str) -> dict:
         STATE[session_id] = load_session(session_id)
     state = STATE[session_id]
     apply_defaults(state)
+    state["session_id"] = session_id
     save_session(session_id, state)
     return state
 
@@ -68,7 +74,8 @@ def delete_session(session_id: str) -> str:
     STATE.pop(sid, None)
     path = _session_path(sid)
     if path.exists():
-        path.unlink()
+        archive_session_file(path, sid)
+        purge_expired()
     return sid
 
 

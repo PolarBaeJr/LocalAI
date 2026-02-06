@@ -3,7 +3,34 @@ import time
 
 from Search import perform_search
 from WebAccess import bravery_search
-from Debug import dbg, set_debug, add_error, add_timing, set_evidence, get_state
+from Debug import (
+    dbg,
+    set_debug,
+    add_error,
+    add_timing,
+    set_evidence,
+    get_state,
+)
+
+# Shared keyword lists used across modules.
+LOCATION_KEYWORDS = [
+    "weather",
+    "temperature",
+    "near me",
+    "closest",
+    "nearby",
+    "local time",
+    "timezone",
+    "traffic",
+    "restaurants",
+    "food near",
+    "gps",
+    "location",
+    "address",
+    "latitude",
+    "longitude",
+    "coord",
+]
 
 
 def split_thinking(text: str):
@@ -36,12 +63,14 @@ def gather_context(prompt: str, web_url: str, deadline: float):
             "performed": should_search,
         },
     )
+    dbg(f"use_search={use_search}, heuristic_decision={should_search}")
 
     if should_search:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             timed_out = True
             search_error = "Search time budget exceeded before starting."
+            dbg("Search aborted: no remaining time budget")
         else:
             _t_search = time.perf_counter()
             dbg("Searching the web (Bravery)…")
@@ -77,6 +106,7 @@ def gather_context(prompt: str, web_url: str, deadline: float):
 
     evidence_text = search_context.strip()
     set_evidence(evidence_text)
+    dbg(f"Evidence length recorded: {len(evidence_text)} chars")
 
     return search_context, web_context, timed_out, search_error
 

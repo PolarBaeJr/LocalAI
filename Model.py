@@ -7,6 +7,18 @@ from typing import Dict, Tuple
 
 import requests
 
+try:
+    from Debug import dbg, set_debug, add_error
+except Exception:  # pragma: no cover - fallback when Debug import fails
+    def dbg(msg: str):
+        return None
+
+    def set_debug(key: str, value):
+        return None
+
+    def add_error(msg: str):
+        return None
+
 # Prefer a local APIkeys.py (gitignored) for secrets; fall back to env var.
 try:
     from APIkeys import OLLAMA_API_KEY as _OLLAMA_API_KEY_FILE  # type: ignore
@@ -118,34 +130,42 @@ def get_ollama_endpoint(timeout: float = 0.8) -> Tuple[str, Dict[str, str], str]
     3) Cloud endpoint (requires OLLAMA_API_KEY in APIkeys.py or env).
     """
     forced_model = _debug_force_model()
+    set_debug("forced_model", forced_model)
 
     explicit_host = os.environ.get("OLLAMA_HOST")
     if explicit_host:
         base = _normalize_base(explicit_host)
         is_cloud = "ollama.com" in base and not _is_local_base(base)
         model = forced_model or (CLOUD_MODEL if is_cloud else LOCAL_MODEL)
+        dbg(f"Using explicit OLLAMA_HOST={base} model={model}")
         return _generate_url(base), _auth_headers(base, require_key=is_cloud), model
 
     if forced_model:
         # If the override looks like "cloud" choose the cloud base; otherwise assume local.
         if forced_model.lower() == "cloud" or forced_model == CLOUD_MODEL:
             base = _normalize_base(DEFAULT_CLOUD_BASE)
+            dbg(f"Forced model -> cloud via {base}")
             return _generate_url(base), _auth_headers(base, require_key=True), CLOUD_MODEL
         if forced_model.lower() == "local" or forced_model == LOCAL_MODEL:
             base = _normalize_base(DEFAULT_LOCAL_BASE)
+            dbg(f"Forced model -> local via {base}")
             return _generate_url(base), {}, LOCAL_MODEL
         # Custom tag: prefer local if reachable, else cloud with auth.
         base_local = _normalize_base(DEFAULT_LOCAL_BASE)
         if _is_up(base_local, timeout=timeout):
+            dbg(f"Forced custom model={forced_model}; local up at {base_local}")
             return _generate_url(base_local), {}, forced_model
         base_cloud = _normalize_base(DEFAULT_CLOUD_BASE)
+        dbg(f"Forced custom model={forced_model}; falling back to cloud {base_cloud}")
         return _generate_url(base_cloud), _auth_headers(base_cloud, require_key=True), forced_model
 
     if _is_up(DEFAULT_LOCAL_BASE, timeout=timeout):
         base = _normalize_base(DEFAULT_LOCAL_BASE)
+        dbg(f"Selected reachable local Ollama at {base}")
         return _generate_url(base), {}, LOCAL_MODEL
 
     cloud_base = _normalize_base(DEFAULT_CLOUD_BASE)
+    dbg(f"Defaulting to cloud Ollama at {cloud_base}")
     return _generate_url(cloud_base), _auth_headers(cloud_base, require_key=True), CLOUD_MODEL
 
 

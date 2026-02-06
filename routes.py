@@ -13,6 +13,10 @@ from Debug import (
     init_debug,
     set_prompt,
     attach_state,
+    dbg,
+    add_error,
+    add_timing,
+    set_debug,
 )
 from Model import SEARCH_TIME_BUDGET, get_ollama_endpoint
 from logic import split_thinking, gather_context
@@ -71,6 +75,7 @@ async def delete_session(session_id: str):
 async def history(session_id: str):
     state = get_state(session_id)
     attach_state(state)
+    dbg(f"History requested for session {session_id}")
     return {"history": state["history"]}
 
 
@@ -80,6 +85,7 @@ async def upload_files(
 ):
     state = get_state(session_id)
     attach_state(state)
+    dbg(f"Upload received: {len(files)} files for session {session_id}")
     count = 0
     for file in files:
         content = await file.read()
@@ -106,16 +112,38 @@ async def send(request: Request):
     state = get_state(session_id)
     attach_state(state)
     init_debug(state)
+    dbg(f"Send called session={session_id} prompt_len={len(prompt)} use_search={use_search}")
     state["use_search"] = use_search
     state["auto_fetch_top_result"] = use_search
 
     state["history"].append(("user", prompt))
     save_session(session_id, state)
 
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+    acc_parts: List[str] = []
+
+    def push_status(text: str):
+        asyncio.run_coroutine_threadsafe(
+            queue.put({"type": "status", "text": text}), loop
+        )
+
+    push_status("Preparing request…")
+    if use_search:
+        push_status("Searching for data…")
+    else:
+        push_status("Skipping search; compiling context…")
+
     deadline = time.monotonic() + SEARCH_TIME_BUDGET
     search_context, web_context, timed_out, search_error = gather_context(
         prompt, "", deadline
     )
+    set_debug("search_error", search_error)
+    if search_error:
+        add_error(search_error)
+    if timed_out:
+        dbg("Search timed out before completion")
+    push_status("Building prompt…")
 
     chat_context = build_chat_context(state["history"])
     full_prompt = build_prompt(
@@ -123,13 +151,11 @@ async def send(request: Request):
     )
     set_prompt(full_prompt)
 
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue = asyncio.Queue()
-    acc_parts: List[str] = []
-
     def model_worker():
         try:
             generate_url, headers, model = get_ollama_endpoint()
+            dbg(f"Streaming request to model={model} url={generate_url}")
+            push_status("Generating response…")
             with requests.post(
                 generate_url,
                 json={"model": model, "prompt": full_prompt, "stream": True},
@@ -145,6 +171,8 @@ async def send(request: Request):
                     chunk = data.get("response", "")
                     if chunk:
                         acc_parts.append(chunk)
+                        if len(acc_parts) % 50 == 0:
+                            dbg(f"Streaming progress: {len(acc_parts)} chunks")
                         asyncio.run_coroutine_threadsafe(
                             queue.put({"type": "token", "text": chunk}), loop
                         )
@@ -154,7 +182,9 @@ async def send(request: Request):
             asyncio.run_coroutine_threadsafe(
                 queue.put({"type": "error", "text": str(e)}), loop
             )
+            add_error(str(e))
         finally:
+            push_status("Finalizing output…")
             asyncio.run_coroutine_threadsafe(queue.put({"type": "end"}), loop)
 
     threading.Thread(target=model_worker, daemon=True).start()
@@ -180,6 +210,8 @@ async def send(request: Request):
             if item["type"] == "token":
                 yield json.dumps(item) + "\n"
             elif item["type"] == "error":
+                dbg(f"Model worker error: {item['text']}")
+                push_status("Model error; see logs")
                 yield json.dumps(item) + "\n"
                 break
             elif item["type"] == "end":
@@ -187,6 +219,8 @@ async def send(request: Request):
                 thinking, answer, has_thinking = split_thinking(acc)
                 state["history"].append(("assistant", acc))
                 save_session(session_id, state)
+                dbg("Streaming finished; response saved to history")
+                push_status("Done")
                 meta = {
                     "type": "final",
                     "raw": acc,

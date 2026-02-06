@@ -2,11 +2,118 @@ from __future__ import annotations
 
 import time
 import os
+import json
+import atexit
+from datetime import datetime
+from pathlib import Path
 from contextlib import contextmanager
+
+# Simple opt-in console logging; controlled via env for noisier runs.
+_debug_stdout_flag = "DEBUG_TO_STDOUT"
 
 _current_state: dict | None = None
 _debug_env_flag = "USE_DEBUG_SETTINGS"
 _debug_force_key = "DEBUG_FORCE_MODEL"
+
+# Internal guard so we only print flag summary once per process.
+_flags_announced = False
+LOG_ROOT = Path(__file__).with_name("Logs")
+LOG_ROOT.mkdir(exist_ok=True)
+ACTIVE_DIR = LOG_ROOT / "run_active"
+_shutdown_reason = "Shutdown"
+
+
+def _timestamp() -> str:
+    return datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+
+def _bootstrap_run_dir() -> Path:
+    """
+    Ensure we have a writable run directory:
+    - If Logs/ doesn't exist, create it.
+    - If Logs/run_active exists, reuse it (continuing the same run).
+    - Otherwise, create Logs/run_active.
+    """
+    LOG_ROOT.mkdir(exist_ok=True)
+    if ACTIVE_DIR.exists():
+        # If there is no end marker, previous run likely crashed; archive it.
+        if not (ACTIVE_DIR / "session_end.txt").exists():
+            crash_target = LOG_ROOT / f"crash_{_timestamp()}"
+            try:
+                ACTIVE_DIR.rename(crash_target)
+            except Exception:
+                pass
+        else:
+            # Clean but unarchived folder: archive with a generic suffix.
+            leftover_target = LOG_ROOT / f"previous_{_timestamp()}"
+            try:
+                ACTIVE_DIR.rename(leftover_target)
+            except Exception:
+                pass
+    ACTIVE_DIR.mkdir(exist_ok=True)
+    return ACTIVE_DIR
+
+
+_run_dir = _bootstrap_run_dir()
+_log_path = _run_dir / "Debug_log.json"
+
+
+def _to_stdout() -> bool:
+    return os.environ.get(_debug_stdout_flag, "1") != "0"
+
+
+def _console(tag: str, message: str):
+    if _to_stdout():
+        print(f"[DEBUG:{tag}] {message}")
+
+
+def _maybe_state():
+    try:
+        return get_state()
+    except RuntimeError:
+        return None
+
+
+def _ensure_debug_keys(state: dict):
+    state.setdefault("dbg_log", [])
+    state.setdefault("dbg_timings", [])
+    state.setdefault("dbg_errors", [])
+    state.setdefault("dbg_fetches", [])
+    state.setdefault("dbg_evidence", "")
+    state.setdefault("dbg_prompt", "")
+    state.setdefault("dbg_data", {})
+
+
+def _session_id():
+    state = _maybe_state()
+    return state.get("session_id") if state else None
+
+
+def _log_flag(flag: str):
+    """
+    Persist a debug flag event to Debug_log.json with session id and timestamp.
+    """
+    try:
+        sid = _session_id()
+        entry = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "Debugflag": flag,
+        }
+        if sid:
+            entry["Session id"] = sid
+        existing = []
+        if _log_path.exists():
+            try:
+                existing = json.loads(_log_path.read_text(encoding="utf-8"))
+                if not isinstance(existing, list):
+                    existing = []
+            except Exception:
+                existing = []
+        existing.append(entry)
+        _log_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        # Never let logging break runtime behavior.
+        pass
 
 
 def attach_state(state: dict):
@@ -30,34 +137,71 @@ def init_debug(state: dict):
     state.setdefault("dbg_evidence", "")
     state.setdefault("dbg_prompt", "")
     state.setdefault("dbg_data", {})
+    log_active_flags()
 
 
 def dbg(message: str):
-    get_state()["dbg_log"].append(message)
+    state = _maybe_state()
+    if state is not None:
+        _ensure_debug_keys(state)
+        state["dbg_log"].append(message)
+    _console("LOG", message)
+    _log_flag(f"dbg: {message}")
 
 
 def set_debug(key: str, value):
-    get_state()["dbg_data"][key] = value
+    state = _maybe_state()
+    if state is not None:
+        _ensure_debug_keys(state)
+        state["dbg_data"][key] = value
+    _console("DATA", f"{key} -> {value}")
+    _log_flag(f"set_debug {key}")
 
 
 def add_error(message: str):
-    get_state()["dbg_errors"].append(message)
+    state = _maybe_state()
+    if state is not None:
+        _ensure_debug_keys(state)
+        state["dbg_errors"].append(message)
+    _console("ERROR", message)
+    _log_flag(f"error: {message}")
 
 
 def add_timing(label: str, seconds: float):
-    get_state()["dbg_timings"].append({"label": label, "seconds": seconds})
+    state = _maybe_state()
+    if state is not None:
+        _ensure_debug_keys(state)
+        state["dbg_timings"].append({"label": label, "seconds": seconds})
+    _console("TIME", f"{label} = {seconds:.3f}s")
+    _log_flag(f"timing {label}={seconds:.3f}s")
 
 
 def add_fetch(url: str, error: str | None):
-    get_state()["dbg_fetches"].append({"url": url, "error": error})
+    state = _maybe_state()
+    if state is not None:
+        _ensure_debug_keys(state)
+        state["dbg_fetches"].append({"url": url, "error": error})
+    status = "ok" if not error else f"error: {error}"
+    _console("FETCH", f"{url} ({status})")
+    _log_flag(f"fetch {url} {status}")
 
 
 def set_evidence(text: str):
-    get_state()["dbg_evidence"] = text
+    state = _maybe_state()
+    if state is not None:
+        _ensure_debug_keys(state)
+        state["dbg_evidence"] = text
+    _console("EVIDENCE", f"len={len(text)}")
+    _log_flag("evidence set")
 
 
 def set_prompt(text: str):
-    get_state()["dbg_prompt"] = text
+    state = _maybe_state()
+    if state is not None:
+        _ensure_debug_keys(state)
+        state["dbg_prompt"] = text
+    _console("PROMPT", f"chars={len(text)}")
+    _log_flag("prompt set")
 
 
 @contextmanager
@@ -93,3 +237,55 @@ def debug_settings_enabled() -> bool:
 
 def get_forced_model_env() -> str | None:
     return os.environ.get(_debug_force_key)
+
+
+def active_flags() -> dict:
+    """Return a snapshot of debug-related environment toggles."""
+    return {
+        "use_debug_settings": debug_settings_enabled(),
+        "forced_model_env": get_forced_model_env(),
+        "debug_to_stdout": _to_stdout(),
+    }
+
+
+def log_active_flags():
+    """Print the debug flag status once per process."""
+    global _flags_announced
+    if _flags_announced:
+        return
+    _flags_announced = True
+    flags = active_flags()
+    _console(
+        "FLAGS",
+        ", ".join(f"{k}={v}" for k, v in flags.items()),
+    )
+    _log_flag("flags: " + ", ".join(f"{k}={v}" for k, v in flags.items()))
+
+
+def _on_exit():
+    try:
+        end_ts = _timestamp()
+        (ACTIVE_DIR / "session_end.txt").write_text(
+            f"Session ended at {datetime.utcnow().isoformat()}Z\n"
+            f"Reason: {_shutdown_reason}\n",
+            encoding="utf-8",
+        )
+        reason_slug = _shutdown_reason.lower().replace(" ", "_")
+        target = LOG_ROOT / f"{end_ts}_{reason_slug}"
+        if target.exists():
+            target = LOG_ROOT / f"{end_ts}_end"
+        try:
+            ACTIVE_DIR.rename(target)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+def set_shutdown_reason(reason: str):
+    """Set the label written at shutdown; e.g., 'Shutdown', 'Restarted'."""
+    global _shutdown_reason
+    _shutdown_reason = reason or "Shutdown"
+
+
+atexit.register(_on_exit)

@@ -1,12 +1,15 @@
 import os
 import requests
 
+from Debug import dbg, add_error, add_timing, set_debug
+
 DEFAULT_SEARCH_URL = os.environ.get("SEARCH_URL", "https://api.duckduckgo.com/")
 GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 
 
 def _duckduckgo_search(query: str, max_results: int, url: str, timeout: int):
+    dbg(f"DDG search start query='{query}' url='{url}'")
     resp = requests.get(
         url,
         params={"q": query, "format": "json", "no_redirect": 1, "no_html": 1},
@@ -38,6 +41,7 @@ def _duckduckgo_search(query: str, max_results: int, url: str, timeout: int):
 
 
 def _google_search(query: str, max_results: int, timeout: int):
+    dbg(f"Google CSE search start query='{query}'")
     resp = requests.get(
         "https://www.googleapis.com/customsearch/v1",
         params={
@@ -73,6 +77,7 @@ def perform_search(
     Prefers Google CSE when GOOGLE_CSE_ID and GOOGLE_API_KEY are set; otherwise falls back to DuckDuckGo.
     """
     if not query:
+        dbg("perform_search: empty query, skipping")
         return [], None
 
     errors = []
@@ -80,19 +85,27 @@ def perform_search(
 
     if use_google:
         try:
+            _t = requests.utils.default_timer()
             google_results = _google_search(query, max_results, timeout)
+            add_timing("search_google", requests.utils.default_timer() - _t)
             if google_results:
+                dbg(f"Google search returned {len(google_results)} results")
                 return google_results[:max_results], None
             errors.append("Google search returned no results.")
         except Exception as e:
             errors.append(f"Google search failed: {e}")
+            add_error(str(e))
 
     url = search_url or DEFAULT_SEARCH_URL
     try:
+        _t = requests.utils.default_timer()
         ddg_results = _duckduckgo_search(query, max_results, url, timeout)
+        add_timing("search_ddg", requests.utils.default_timer() - _t)
         if ddg_results:
+            dbg(f"DDG search returned {len(ddg_results)} results")
             return ddg_results[:max_results], None
         return ddg_results, "; ".join(errors) if errors else None
     except Exception as e:
         errors.append(str(e))
+        add_error(str(e))
         return [], "; ".join(errors) if errors else str(e)
