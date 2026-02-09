@@ -5,23 +5,30 @@ import os
 import json
 import atexit
 from datetime import datetime
-from pathlib import Path
 from contextlib import contextmanager
+from pathlib import Path
+
+from Config import (
+    LOG_ROOT,
+    CRASH_ROOT,
+    ACTIVE_LOG_DIR,
+    DEBUG_STDOUT_FLAG,
+    DEBUG_ENV_FLAG,
+    DEBUG_FORCE_MODEL_KEY,
+    DEBUG_COLORS,
+)
 
 # Simple opt-in console logging; controlled via env for noisier runs.
-_debug_stdout_flag = "DEBUG_TO_STDOUT"
 
 _current_state: dict | None = None
-_debug_env_flag = "USE_DEBUG_SETTINGS"
-_debug_force_key = "DEBUG_FORCE_MODEL"
+_debug_env_flag = DEBUG_ENV_FLAG
+_debug_force_key = DEBUG_FORCE_MODEL_KEY
 
 # Internal guard so we only print flag summary once per process.
 _flags_announced = False
-LOG_ROOT = Path(__file__).with_name("Logs")
-CRASH_ROOT = Path(__file__).with_name("Crashlog")
 LOG_ROOT.mkdir(exist_ok=True)
 CRASH_ROOT.mkdir(exist_ok=True)
-ACTIVE_DIR = LOG_ROOT / "run_active"
+ACTIVE_DIR = ACTIVE_LOG_DIR
 _shutdown_reason = "Shutdown"
 
 
@@ -71,23 +78,13 @@ _log_path = _run_dir / "Debug_log.json"
 
 
 def _to_stdout() -> bool:
-    return os.environ.get(_debug_stdout_flag, "1") != "0"
+    return os.environ.get(DEBUG_STDOUT_FLAG, "1") != "0"
 
 
 def _console(tag: str, message: str):
     if _to_stdout():
         try:
-            colors = {
-                "DATA": "\033[32m",   # green
-                "FLAGS": "\033[32m",  # green
-                "LOG": "\033[33m",    # yellow
-                "ERROR": "\033[31m",  # red
-                "TIME": "\033[36m",   # cyan
-                "FETCH": "\033[35m",  # magenta
-                "PROMPT": "\033[34m", # blue
-                "EVIDENCE": "\033[34m", # blue
-            }
-            color = colors.get(tag, "")
+            color = DEBUG_COLORS.get(tag, "")
             reset = "\033[0m" if color else ""
             print(f"{color}[DEBUG:{tag}] {message}{reset}")
         except BrokenPipeError:

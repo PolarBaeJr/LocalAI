@@ -41,13 +41,20 @@ except Exception:  # pragma: no cover - during early import
     def get_forced_model_env() -> str | None:
         return None
 
-LOCAL_MODEL = "deepseek-r1:14b"
-CLOUD_MODEL = "deepseek-v3.2:cloud"
-SEARCH_TIME_BUDGET = 180  # seconds max for all search activity per message
+from Config import (
+    LOCAL_MODEL,
+    CLOUD_MODEL,
+    SEARCH_TIME_BUDGET,
+    DEFAULT_LOCAL_BASE,
+    DEFAULT_CLOUD_BASE,
+    LOCAL_STARTUP_GRACE_S,
+)
 
-DEFAULT_LOCAL_BASE = os.environ.get("OLLAMA_LOCAL_BASE", "http://localhost:11434")
-DEFAULT_CLOUD_BASE = os.environ.get("OLLAMA_CLOUD_BASE", "https://ollama.com")
-LOCAL_STARTUP_GRACE_S = float(os.environ.get("OLLAMA_LOCAL_WAIT_SECONDS", "8"))
+DEFAULT_LOCAL_BASE = os.environ.get("OLLAMA_LOCAL_BASE", DEFAULT_LOCAL_BASE)
+DEFAULT_CLOUD_BASE = os.environ.get("OLLAMA_CLOUD_BASE", DEFAULT_CLOUD_BASE)
+LOCAL_STARTUP_GRACE_S = float(
+    os.environ.get("OLLAMA_LOCAL_WAIT_SECONDS", str(LOCAL_STARTUP_GRACE_S))
+)
 
 
 def _normalize_base(host: str) -> str:

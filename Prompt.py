@@ -1,5 +1,7 @@
 import os
 
+from Config import FORMAT_HINT_BASE, FORMAT_HINT_THINKING
+
 try:
     import DebugSettings  # type: ignore
 except Exception:
@@ -15,19 +17,10 @@ def _show_thinking() -> bool:
     return False
 
 
-FORMAT_HINT = (
-    "Use the SEARCH RESULT and WEB PAGE lines only as background context. "
-    "Do NOT repeat, list, or quote the raw search results or URLs; synthesize the answer in your own words. "
-    "Keep the response concise and user-facing; skip reasoning steps and metadata."
-)
+FORMAT_HINT = FORMAT_HINT_BASE
 
 if _show_thinking():
-    FORMAT_HINT = (
-        "Use the SEARCH RESULT and WEB PAGE lines only as background context. "
-        "Do NOT repeat, list, or quote the raw search results or URLs; synthesize the answer in your own words. "
-        "If you include reasoning, wrap it in <think>...</think> and place the final answer after the tags. "
-        "Keep the final answer concise and user-facing."
-    )
+    FORMAT_HINT = FORMAT_HINT_THINKING
 
 
 def build_chat_context(history, limit=10):

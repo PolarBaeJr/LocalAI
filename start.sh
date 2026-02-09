@@ -73,7 +73,7 @@ prefix_tee() {
 tag, log_a, log_b = sys.argv[1:4]
 f1 = open(log_a, "a", buffering=1, encoding="utf-8", errors="ignore")
 f2 = open(log_b, "a", buffering=1, encoding="utf-8", errors="ignore")
-COLORS = {"CLOUDFLARED":"\033[36m","OLLAMA":"\033[35m","APP":"\033[33m"}
+COLORS = {"CLOUDFLARED":"\033[36m","OLLAMA":"\033[35m","APP":"\033[33m","CADDY":"\033[32m"}
 WARN_COLOR = "\033[31m"
 ERR_COLOR = "\033[31;2m"
 color = COLORS.get(tag, "")
@@ -165,6 +165,7 @@ stop_services() {
       > "$ROOT_DIR/Logs/run_active/session_end.txt" || true
   fi
   pkill -x cloudflared >/dev/null 2>&1 || true
+  pkill -x caddy >/dev/null 2>&1 || true
   pkill -x ollama >/dev/null 2>&1 || true
   pkill -f "python Main.py" >/dev/null 2>&1 || true
   pkill -f "uvicorn Main:app" >/dev/null 2>&1 || true
@@ -173,6 +174,30 @@ stop_services() {
 }
 
 log () { printf "[%s] %s\n" "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$*"; }
+
+# Start local reverse proxy (Caddy) if not already running.
+start_caddy() {
+  if pgrep -x caddy >/dev/null 2>&1; then
+    log "caddy already running"
+    return
+  fi
+  local caddy_bin
+  caddy_bin="$(command -v caddy || true)"
+  if [[ -z "$caddy_bin" ]]; then
+    log "caddy not found. Install with: brew install caddy"
+    return 1
+  fi
+  local caddyfile="${CADDYFILE_PATH:-/Users/matthewcheng/Projects/Website hosting/Website/Caddyfile}"
+  # Escape spaces because run_with_prefix uses eval.
+  local caddyfile_escaped="${caddyfile// /\\ }"
+  if [[ ! -f "$caddyfile" ]]; then
+    log "Caddyfile not found at $caddyfile"
+    return 1
+  fi
+  log "Starting caddy (stream + $LOG_DIR/caddy.log)"
+  run_with_prefix "CADDY" "$LOG_DIR/caddy.log" "$LOG_DIR/caddy.log" 0 \
+    "$caddy_bin" run --config "$caddyfile_escaped"
+}
 
 # Start cloudflared tunnel if not already running
 start_cloudflare() {
@@ -295,6 +320,7 @@ start_app() {
 }
 
 start_stack() {
+  start_caddy
   start_cloudflare
   start_ollama
   wait_for_ollama

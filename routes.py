@@ -25,6 +25,7 @@ from Model import SEARCH_TIME_BUDGET, get_ollama_endpoint
 from logic import split_thinking, gather_context
 from uiconfig import HTML_TEMPLATE, ensure_html_exists
 from logreader import read_log as read_log_api
+from Config import UPLOADS_DIR
 from sid_create import (
     get_state,
     save_session,
@@ -34,7 +35,6 @@ from sid_create import (
 )
 
 router = APIRouter()
-UPLOADS_DIR = Path(__file__).with_name("uploads")
 UPLOADS_DIR.mkdir(exist_ok=True)
 
 
@@ -104,10 +104,9 @@ async def debug_panel(session_id: str):
 async def index_mtime():
     try:
         ensure_html_exists()
-        path = Path(__file__).with_name("index.html")
-        if not path.exists():
+        if not HTML_TEMPLATE.exists():
             return {"mtime": 0}
-        return {"mtime": path.stat().st_mtime}
+        return {"mtime": HTML_TEMPLATE.stat().st_mtime}
     except Exception:  # noqa: BLE001
         return {"mtime": 0}
 
@@ -116,7 +115,7 @@ async def index_mtime():
 async def index_watch():
     async def event_stream():
         ensure_html_exists()
-        path = Path(__file__).with_name("index.html")
+        path = HTML_TEMPLATE
         last_mtime = 0.0
         while True:
             try:

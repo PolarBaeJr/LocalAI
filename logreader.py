@@ -5,13 +5,14 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 
+from Config import LOG_ROOT, LOGREADER_ALLOWED, LOGREADER_MAX_LINES
+
 app = FastAPI()
 
-ROOT = Path(__file__).parent
-LOG_DIR = ROOT / "Logs" / "run_active"
+LOG_DIR = LOG_ROOT / "run_active"
 
 
-def _read_log(path: Path, max_lines: int = 500) -> str:
+def _read_log(path: Path, max_lines: int = LOGREADER_MAX_LINES) -> str:
     if not path.exists():
         return ""
     try:
@@ -23,7 +24,7 @@ def _read_log(path: Path, max_lines: int = 500) -> str:
 
 def _resolve_log_path(name: str) -> Path:
     name = name.lower()
-    if name not in {"localchat", "ollama", "cloudflared"}:
+    if name not in LOGREADER_ALLOWED:
         return Path()
     path = LOG_DIR / f"{name}.log"
     return path

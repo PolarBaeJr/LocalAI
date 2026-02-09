@@ -3,8 +3,9 @@ import time
 import requests
 
 from Debug import dbg, add_error, add_timing, set_debug
+from Config import DEFAULT_SEARCH_URL as DEFAULT_SEARCH_URL_CONFIG
 
-DEFAULT_SEARCH_URL = os.environ.get("SEARCH_URL", "https://api.duckduckgo.com/")
+DEFAULT_SEARCH_URL = os.environ.get("SEARCH_URL", DEFAULT_SEARCH_URL_CONFIG)
 GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
 

@@ -6,12 +6,11 @@ import uuid
 from Debug import dbg
 from fastapi import HTTPException
 
-from Config import apply_defaults
+from Config import apply_defaults, SESSIONS_DIR
 from Data_retension import archive_session_file, archive_session_uploads, purge_expired
 
 # In-memory cache; persists to disk under sessions/*.json
 STATE: Dict[str, dict] = {}
-SESSIONS_DIR = Path(__file__).with_name("sessions")
 SESSIONS_DIR.mkdir(exist_ok=True)
 
 

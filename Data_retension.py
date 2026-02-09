@@ -15,13 +15,15 @@ from pathlib import Path
 from typing import Optional
 
 from Debug import dbg, add_error
+from Config import (
+    RETENTION_DAYS,
+    UPLOAD_RETENTION_DAYS,
+    ARCHIVE_DIR,
+    UPLOADS_DIR,
+    UPLOAD_ARCHIVE_DIR,
+)
 
-RETENTION_DAYS = 30
-UPLOAD_RETENTION_DAYS = 1
-ARCHIVE_DIR = Path(__file__).with_name("Deleted_Data")
 ARCHIVE_DIR.mkdir(exist_ok=True)
-UPLOADS_DIR = Path(__file__).with_name("uploads")
-UPLOAD_ARCHIVE_DIR = ARCHIVE_DIR / "uploads"
 UPLOAD_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 
 

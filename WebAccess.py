@@ -3,11 +3,9 @@ import time
 import requests
 
 from Debug import dbg, add_error, add_fetch, add_timing
+from Config import DEFAULT_USER_AGENT, DEFAULT_BRAVE_ENDPOINT
 
-DEFAULT_USER_AGENT = "LocalChat/1.0"
-BRAVE_ENDPOINT = os.environ.get(
-    "BRAVE_SEARCH_ENDPOINT", "https://api.search.brave.com/res/v1/web/search"
-)
+BRAVE_ENDPOINT = os.environ.get("BRAVE_SEARCH_ENDPOINT", DEFAULT_BRAVE_ENDPOINT)
 
 # Prefer a local APIkeys.py (not tracked) for secrets; fall back to env var.
 try:

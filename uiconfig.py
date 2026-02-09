@@ -1,9 +1,6 @@
 """UI template generation for the lightweight FastAPI shell."""
 
-from pathlib import Path
-
-# Store the generated HTML alongside this module for easy editing.
-HTML_TEMPLATE = Path(__file__).with_name("index.html")
+from Config import HTML_TEMPLATE
 
 
 def build_html() -> None:
